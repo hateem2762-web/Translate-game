@@ -53,6 +53,9 @@ class SettingsDataStore(private val context: Context) {
         val AI_ENDPOINT_URL = stringPreferencesKey("ai_endpoint_url")
         val AI_MODEL_NAME = stringPreferencesKey("ai_model_name")
 
+        val LIBRE_ENDPOINT_URL = stringPreferencesKey("libre_endpoint_url")
+        val LIBRE_API_KEY = stringPreferencesKey("libre_api_key")
+
         val ROI_X = intPreferencesKey("roi_x")
         val ROI_Y = intPreferencesKey("roi_y")
         val ROI_W = intPreferencesKey("roi_w")
@@ -103,7 +106,9 @@ class SettingsDataStore(private val context: Context) {
             aiPreset = preset,
             aiApiKey = prefs[Keys.AI_API_KEY] ?: "",
             aiEndpointUrl = prefs[Keys.AI_ENDPOINT_URL] ?: preset.defaultBaseUrl,
-            aiModelName = prefs[Keys.AI_MODEL_NAME] ?: preset.defaultModel
+            aiModelName = prefs[Keys.AI_MODEL_NAME] ?: preset.defaultModel,
+            libreEndpointUrl = prefs[Keys.LIBRE_ENDPOINT_URL] ?: TranslationConfig.DEFAULT_LIBRE_ENDPOINT,
+            libreApiKey = prefs[Keys.LIBRE_API_KEY] ?: ""
         )
     }
 
@@ -208,6 +213,14 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun updateAiModelName(modelName: String) {
         context.dataStore.edit { it[Keys.AI_MODEL_NAME] = modelName }
+    }
+
+    suspend fun updateLibreEndpointUrl(url: String) {
+        context.dataStore.edit { it[Keys.LIBRE_ENDPOINT_URL] = url }
+    }
+
+    suspend fun updateLibreApiKey(apiKey: String) {
+        context.dataStore.edit { it[Keys.LIBRE_API_KEY] = apiKey }
     }
 
     suspend fun updateSourceLanguage(code: String) {

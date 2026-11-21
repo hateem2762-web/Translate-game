@@ -98,7 +98,8 @@ class SmartAiTranslationProvider(
     override suspend fun isReady(config: TranslationConfig): Boolean {
         return when (config.aiPreset) {
             AiProviderPreset.GEMINI_FLASH,
-            AiProviderPreset.GEMINI_LITE -> true
+            AiProviderPreset.GEMINI_LITE ->
+                config.aiApiKey.isNotBlank() || ensureFirebaseInitialized(appContext)
             AiProviderPreset.OPENAI_COMPATIBLE ->
                 config.aiApiKey.isNotBlank() && isValidHttpsUrl(config.aiEndpointUrl)
         }
@@ -169,15 +170,17 @@ class SmartAiTranslationProvider(
         config: TranslationConfig
     ): String {
         return when (config.aiPreset) {
-            AiProviderPreset.GEMINI_FLASH -> callFirebaseGemini(
+            AiProviderPreset.GEMINI_FLASH -> callGemini(
                 systemPrompt = systemPrompt,
                 text = userContent,
-                preferLite = false
+                preferLite = false,
+                config = config
             )
-            AiProviderPreset.GEMINI_LITE -> callFirebaseGemini(
+            AiProviderPreset.GEMINI_LITE -> callGemini(
                 systemPrompt = systemPrompt,
                 text = userContent,
-                preferLite = true
+                preferLite = true,
+                config = config
             )
             AiProviderPreset.OPENAI_COMPATIBLE -> {
                 val apiKey = config.aiApiKey.trim()
@@ -196,6 +199,125 @@ class SmartAiTranslationProvider(
         }
     }
 
+    /**
+     * Gemini entry point. If the user pasted a Gemini API key we talk to the Gemini REST API
+     * directly, which needs no Firebase / google-services.json at all. Without a key we fall back
+     * to Firebase AI Logic (which does need google-services.json).
+     */
+    private suspend fun callGemini(
+        systemPrompt: String,
+        text: String,
+        preferLite: Boolean,
+        config: TranslationConfig
+    ): String {
+        val apiKey = config.aiApiKey.trim()
+        if (apiKey.isNotEmpty()) {
+            return callGeminiRest(systemPrompt, text, preferLite, apiKey, config)
+        }
+        return callFirebaseGemini(systemPrompt, text, preferLite)
+    }
+
+    private suspend fun callGeminiRest(
+        systemPrompt: String,
+        text: String,
+        preferLite: Boolean,
+        apiKey: String,
+        config: TranslationConfig
+    ): String {
+        val preset = if (preferLite) AiProviderPreset.GEMINI_LITE else AiProviderPreset.GEMINI_FLASH
+        val model = config.aiModelName.trim().ifEmpty { preset.defaultModel }
+        try {
+            return withContext(Dispatchers.IO) { requestGeminiRest(model, apiKey, systemPrompt, text) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: AiQuotaExceededException) {
+            val liteModel = AiProviderPreset.GEMINI_LITE.defaultModel
+            if (!preferLite && model != liteModel) {
+                Log.w(TAG, "$model quota hit, falling back to $liteModel")
+                return withContext(Dispatchers.IO) { requestGeminiRest(liteModel, apiKey, systemPrompt, text) }
+            }
+            throw e
+        }
+    }
+
+    private fun requestGeminiRest(
+        model: String,
+        apiKey: String,
+        systemPrompt: String,
+        text: String
+    ): String {
+        val payload = JSONObject().apply {
+            put(
+                "systemInstruction",
+                JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt)))
+            )
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("parts", JSONArray().put(JSONObject().put("text", "Game text:\n$text")))
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().put("temperature", 0.2).put("maxOutputTokens", 2048)
+            )
+        }
+
+        val request = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
+            .addHeader("x-goog-api-key", apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        val geminiClient = client.newBuilder().callTimeout(40, TimeUnit.SECONDS).readTimeout(35, TimeUnit.SECONDS).build()
+        geminiClient.newCall(request).execute().use { response ->
+            val rawBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val apiMsg = runCatching {
+                    JSONObject(rawBody).optJSONObject("error")?.optString("message")
+                }.getOrNull()?.takeIf { it.isNotBlank() }
+                Log.e(TAG, "Gemini REST HTTP ${response.code}: ${apiMsg ?: rawBody}")
+                when (response.code) {
+                    429 -> {
+                        quotaCooldownUntilMs.set(System.currentTimeMillis() + QUOTA_COOLDOWN_MS)
+                        throw AiQuotaExceededException(
+                            "Gemini kotası doldu (429). Bir süre bekleyin, Hızlı Yerel / LibreTranslate moduna geçin veya başka bir anahtar kullanın."
+                        )
+                    }
+                    400, 401, 403 -> throw IOException(
+                        "Gemini API anahtarı geçersiz veya yetkisiz (${response.code}). ${apiMsg.orEmpty()}".trim()
+                    )
+                    404 -> throw IOException(
+                        "Gemini modeli bulunamadı: \"$model\". Model Kimliği alanına geçerli bir model yazın (ör. gemini-2.5-flash)."
+                    )
+                    else -> throw IOException("Gemini API hatası (${response.code}): ${apiMsg.orEmpty()}".trim())
+                }
+            }
+
+            val json = JSONObject(rawBody)
+            val candidate = json.optJSONArray("candidates")?.optJSONObject(0)
+            val parts = candidate?.optJSONObject("content")?.optJSONArray("parts")
+            val result = buildString {
+                if (parts != null) {
+                    for (i in 0 until parts.length()) {
+                        append(parts.optJSONObject(i)?.optString("text").orEmpty())
+                    }
+                }
+            }.trim()
+            if (result.isBlank()) {
+                val blocked = json.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
+                throw IOException(
+                    if (blocked.isNotBlank()) "Gemini isteği engelledi ($blocked)." else "Gemini AI boş yanıt döndürdü."
+                )
+            }
+            quotaCooldownUntilMs.set(0L)
+            return result
+        }
+    }
+
     private suspend fun callFirebaseGemini(
         systemPrompt: String,
         text: String,
@@ -203,8 +325,9 @@ class SmartAiTranslationProvider(
     ): String {
         if (!ensureFirebaseInitialized(appContext)) {
             throw IOException(
-                "Firebase başlatılamadı (google-services.json eksik veya geçersiz). " +
-                    "Lütfen projeyi google-services.json ile derleyin veya Özel API / Hızlı Yerel kullanın."
+                "Firebase kullanılamıyor (google-services.json yok). " +
+                    "Çözüm: Motor kartındaki \"Gemini API Anahtarı\" alanına ücretsiz anahtarınızı yapıştırın " +
+                    "(aistudio.google.com/apikey) — Firebase gerekmez. Alternatif: LibreTranslate veya Hızlı Yerel."
             )
         }
         val prompt = "$systemPrompt\n\nGame text:\n$text"

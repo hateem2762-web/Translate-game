@@ -10,7 +10,8 @@ enum class DisplayMode(val shortLabelTr: String) {
 enum class TranslationEngineMode(val shortLabelTr: String) {
     OFFLINE_LOCAL("Yerel"),
     SMART_AI("AI"),
-    DEEPL("DeepL")
+    DEEPL("DeepL"),
+    LIBRETRANSLATE("Libre")
 }
 
 enum class AiProviderPreset(
@@ -21,7 +22,7 @@ enum class AiProviderPreset(
     val requiresUserApiKey: Boolean
 ) {
     GEMINI_FLASH(
-        displayName = "Gemini 3.8 Flash (Anahtarsız)",
+        displayName = "Gemini 3.8 Flash",
         shortLabelTr = "Flash",
         defaultBaseUrl = "firebase-ai-logic",
         defaultModel = "gemini-3.8-flash",
@@ -97,5 +98,12 @@ data class TranslationConfig(
     val aiPreset: AiProviderPreset = AiProviderPreset.GEMINI_FLASH,
     val aiApiKey: String = "",
     val aiEndpointUrl: String = AiProviderPreset.GEMINI_FLASH.defaultBaseUrl,
-    val aiModelName: String = AiProviderPreset.GEMINI_FLASH.defaultModel
-)
+    val aiModelName: String = AiProviderPreset.GEMINI_FLASH.defaultModel,
+    // LibreTranslate (self-hosted or hosted instance). API key is optional for self-hosted servers.
+    val libreEndpointUrl: String = DEFAULT_LIBRE_ENDPOINT,
+    val libreApiKey: String = ""
+) {
+    companion object {
+        const val DEFAULT_LIBRE_ENDPOINT = "https://libretranslate.com"
+    }
+}

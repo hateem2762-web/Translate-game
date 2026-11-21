@@ -123,6 +123,8 @@ fun MainScreen(
     aiApiKeyDraft: String,
     aiModelDraft: String,
     aiEndpointDraft: String,
+    libreEndpointDraft: String,
+    libreApiKeyDraft: String,
     onRequestOverlayPermission: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onStartCaptureClick: () -> Unit,
@@ -145,6 +147,8 @@ fun MainScreen(
     onAiApiKeyChange: (String) -> Unit,
     onAiModelChange: (String) -> Unit,
     onAiEndpointChange: (String) -> Unit,
+    onLibreEndpointChange: (String) -> Unit,
+    onLibreApiKeyChange: (String) -> Unit,
     onTestAiConnectionClick: () -> Unit,
     onSelectSourceLanguage: (SupportedLanguage) -> Unit,
     onSelectTargetLanguage: (SupportedLanguage) -> Unit,
@@ -273,6 +277,8 @@ fun MainScreen(
                             aiApiKeyDraft = aiApiKeyDraft,
                             aiModelDraft = aiModelDraft,
                             aiEndpointDraft = aiEndpointDraft,
+                            libreEndpointDraft = libreEndpointDraft,
+                            libreApiKeyDraft = libreApiKeyDraft,
                             onSelectDisplayMode = onSelectDisplayMode,
                             onSelectEngineMode = onSelectEngineMode,
                             onFontSizeSpChange = onFontSizeSpChange,
@@ -290,6 +296,8 @@ fun MainScreen(
                             onAiApiKeyChange = onAiApiKeyChange,
                             onAiModelChange = onAiModelChange,
                             onAiEndpointChange = onAiEndpointChange,
+                            onLibreEndpointChange = onLibreEndpointChange,
+                            onLibreApiKeyChange = onLibreApiKeyChange,
                             onTestAiConnectionClick = onTestAiConnectionClick
                         )
                     }
@@ -611,6 +619,8 @@ private fun DisplayAndEngineModeCard(
     aiApiKeyDraft: String,
     aiModelDraft: String,
     aiEndpointDraft: String,
+    libreEndpointDraft: String,
+    libreApiKeyDraft: String,
     onSelectDisplayMode: (DisplayMode) -> Unit,
     onSelectEngineMode: (TranslationEngineMode) -> Unit,
     onFontSizeSpChange: (Float) -> Unit,
@@ -628,6 +638,8 @@ private fun DisplayAndEngineModeCard(
     onAiApiKeyChange: (String) -> Unit,
     onAiModelChange: (String) -> Unit,
     onAiEndpointChange: (String) -> Unit,
+    onLibreEndpointChange: (String) -> Unit,
+    onLibreApiKeyChange: (String) -> Unit,
     onTestAiConnectionClick: () -> Unit
 ) {
     var showApiKey by remember { mutableStateOf(false) }
@@ -895,6 +907,7 @@ private fun DisplayAndEngineModeCard(
                                         TranslationEngineMode.OFFLINE_LOCAL -> Icons.Rounded.OfflineBolt
                                         TranslationEngineMode.SMART_AI -> Icons.Rounded.AutoAwesome
                                         TranslationEngineMode.DEEPL -> Icons.Rounded.Translate
+                                        TranslationEngineMode.LIBRETRANSLATE -> Icons.Rounded.Translate
                                     },
                                     contentDescription = null,
                                     modifier = Modifier.size(16.dp)
@@ -907,11 +920,13 @@ private fun DisplayAndEngineModeCard(
                                 activeContainerColor = when (mode) {
                                     TranslationEngineMode.SMART_AI -> AmberTertiary.copy(alpha = 0.22f)
                                     TranslationEngineMode.DEEPL -> Color(0xFF38BDF8).copy(alpha = 0.22f)
+                                    TranslationEngineMode.LIBRETRANSLATE -> Color(0xFF34D399).copy(alpha = 0.22f)
                                     TranslationEngineMode.OFFLINE_LOCAL -> CyanContainer
                                 },
                                 activeContentColor = when (mode) {
                                     TranslationEngineMode.SMART_AI -> AmberTertiary
                                     TranslationEngineMode.DEEPL -> Color(0xFF38BDF8)
+                                    TranslationEngineMode.LIBRETRANSLATE -> Color(0xFF34D399)
                                     TranslationEngineMode.OFFLINE_LOCAL -> CyanPrimary
                                 },
                                 inactiveContainerColor = ObsidianSurfaceElevated,
@@ -923,6 +938,7 @@ private fun DisplayAndEngineModeCard(
                                     TranslationEngineMode.OFFLINE_LOCAL -> stringResource(R.string.engine_mode_offline)
                                     TranslationEngineMode.SMART_AI -> stringResource(R.string.engine_mode_ai)
                                     TranslationEngineMode.DEEPL -> stringResource(R.string.engine_mode_deepl)
+                                    TranslationEngineMode.LIBRETRANSLATE -> stringResource(R.string.engine_mode_libre)
                                 },
                                 maxLines = 1,
                                 softWrap = false,
@@ -937,6 +953,8 @@ private fun DisplayAndEngineModeCard(
                             "Bağlam duyarlı LLM çevirisi (önbellek + sabitleme ile minimum kota tüketimi)."
                         TranslationEngineMode.DEEPL ->
                             "Yüksek doğruluklu DeepL sinirsel makine çevirisi (toplu satır ve önbellek desteği)."
+                        TranslationEngineMode.LIBRETRANSLATE ->
+                            "Açık kaynak LibreTranslate (kendi sunucunuz veya herhangi bir örnek). Toplu satır ve önbellek desteği."
                         TranslationEngineMode.OFFLINE_LOCAL ->
                             "Sıfır internet gecikmesi ve sınırsız kullanım için cihaz içi ML Kit."
                     },
@@ -961,8 +979,7 @@ private fun DisplayAndEngineModeCard(
                             style = MaterialTheme.typography.labelLarge,
                             color = AmberTertiary
                         )
-                        val isReadyBadge = !uiState.config.aiPreset.requiresUserApiKey ||
-                            uiState.config.aiApiKey.isNotBlank()
+                        val isReadyBadge = uiState.config.aiApiKey.isNotBlank()
                         if (isReadyBadge) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
@@ -973,11 +990,7 @@ private fun DisplayAndEngineModeCard(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = if (!uiState.config.aiPreset.requiresUserApiKey) {
-                                        "Anahtarsız Hazır"
-                                    } else {
-                                        "Otomatik Kaydedildi"
-                                    },
+                                    text = "Anahtar Kaydedildi",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = EmeraldSuccess
                                 )
@@ -1009,16 +1022,19 @@ private fun DisplayAndEngineModeCard(
                         }
                     }
 
-                    if (!uiState.config.aiPreset.requiresUserApiKey) {
-                        val activeModelHint = if (uiState.config.aiPreset == AiProviderPreset.GEMINI_LITE) {
-                            "Firebase AI Logic (gemini-3.5-flash-lite) aktif. Yüksek hacimli, kota dostu model."
+                    val isGeminiPreset = !uiState.config.aiPreset.requiresUserApiKey
+                    if (isGeminiPreset) {
+                        val hasGeminiKey = aiApiKeyDraft.isNotBlank()
+                        val activeModelHint = if (hasGeminiKey) {
+                            "Gemini API anahtarı ile doğrudan bağlanılıyor (google-services.json / Firebase gerekmez)."
                         } else {
-                            "Firebase AI Logic (gemini-3.8-flash) aktif. Kota dolarsa otomatik gemini-3.5-flash-lite dener."
+                            "Anahtar girilmezse Firebase AI Logic denenir (google-services.json gerekir). Firebase olmadan çalışması için aşağıya ücretsiz Gemini API anahtarınızı yapıştırın (aistudio.google.com/apikey)."
                         }
+                        val hintColor = if (hasGeminiKey) EmeraldSuccess else AmberTertiary
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = EmeraldSuccess.copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.35f))
+                            color = hintColor.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, hintColor.copy(alpha = 0.35f))
                         ) {
                             Row(
                                 modifier = Modifier
@@ -1029,61 +1045,68 @@ private fun DisplayAndEngineModeCard(
                                 Icon(
                                     imageVector = Icons.Rounded.CheckCircle,
                                     contentDescription = null,
-                                    tint = EmeraldSuccess,
+                                    tint = hintColor,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = activeModelHint,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = EmeraldSuccess
+                                    color = hintColor
                                 )
                             }
                         }
-                    } else {
-                        OutlinedTextField(
-                            value = aiApiKeyDraft,
-                            onValueChange = onAiApiKeyChange,
-                            label = { Text("API Anahtarı (anında kaydedilir)") },
-                            placeholder = { Text("gsk_... / sk-...") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                autoCorrectEnabled = false,
-                                keyboardType = KeyboardType.Password
-                            ),
-                            visualTransformation = if (showApiKey) {
-                                VisualTransformation.None
-                            } else {
-                                PasswordVisualTransformation()
-                            },
-                            trailingIcon = {
-                                IconButton(onClick = { showApiKey = !showApiKey }) {
-                                    Icon(
-                                        imageVector = if (showApiKey) {
-                                            Icons.Rounded.VisibilityOff
-                                        } else {
-                                            Icons.Rounded.Visibility
-                                        },
-                                        contentDescription = "API anahtarını göster veya gizle"
-                                    )
-                                }
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("ai_api_key_input")
-                        )
+                    }
 
-                        OutlinedTextField(
-                            value = aiModelDraft,
-                            onValueChange = onAiModelChange,
-                            label = { Text("Model Kimliği") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("ai_model_input")
-                        )
+                    OutlinedTextField(
+                        value = aiApiKeyDraft,
+                        onValueChange = onAiApiKeyChange,
+                        label = {
+                            Text(
+                                if (isGeminiPreset) "Gemini API Anahtarı (önerilir, anında kaydedilir)"
+                                else "API Anahtarı (anında kaydedilir)"
+                            )
+                        },
+                        placeholder = { Text(if (isGeminiPreset) "AIza..." else "gsk_... / sk-...") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            autoCorrectEnabled = false,
+                            keyboardType = KeyboardType.Password
+                        ),
+                        visualTransformation = if (showApiKey) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { showApiKey = !showApiKey }) {
+                                Icon(
+                                    imageVector = if (showApiKey) {
+                                        Icons.Rounded.VisibilityOff
+                                    } else {
+                                        Icons.Rounded.Visibility
+                                    },
+                                    contentDescription = "API anahtarını göster veya gizle"
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("ai_api_key_input")
+                    )
 
+                    OutlinedTextField(
+                        value = aiModelDraft,
+                        onValueChange = onAiModelChange,
+                        label = { Text("Model Kimliği") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("ai_model_input")
+                    )
+
+                    if (!isGeminiPreset) {
                         OutlinedTextField(
                             value = aiEndpointDraft,
                             onValueChange = onAiEndpointChange,
@@ -1347,6 +1370,135 @@ private fun DisplayAndEngineModeCard(
                                         }
                                     }
                                 }
+                            }
+                        }
+                        else -> Unit
+                    }
+                }
+            }
+
+            AnimatedVisibility(visible = uiState.config.engineMode == TranslationEngineMode.LIBRETRANSLATE) {
+                Column(
+                    modifier = Modifier.padding(top = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    HorizontalDivider(color = ObsidianOutline)
+                    val libreAccent = Color(0xFF34D399)
+                    Text(
+                        text = "LibreTranslate Ayarları",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = libreAccent
+                    )
+
+                    OutlinedTextField(
+                        value = libreEndpointDraft,
+                        onValueChange = onLibreEndpointChange,
+                        label = { Text("Sunucu Adresi") },
+                        placeholder = { Text("https://libretranslate.com veya http://192.168.1.10:5000") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            autoCorrectEnabled = false,
+                            keyboardType = KeyboardType.Uri
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("libre_endpoint_input")
+                    )
+
+                    OutlinedTextField(
+                        value = libreApiKeyDraft,
+                        onValueChange = onLibreApiKeyChange,
+                        label = { Text("API Anahtarı (kendi sunucunuzda gerekmez)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            autoCorrectEnabled = false,
+                            keyboardType = KeyboardType.Password
+                        ),
+                        visualTransformation = if (showApiKey) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { showApiKey = !showApiKey }) {
+                                Icon(
+                                    imageVector = if (showApiKey) {
+                                        Icons.Rounded.VisibilityOff
+                                    } else {
+                                        Icons.Rounded.Visibility
+                                    },
+                                    contentDescription = "API anahtarını göster veya gizle"
+                                )
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("libre_api_key_input")
+                    )
+
+                    Text(
+                        text = "libretranslate.com herkese açık örneği API anahtarı ister. Ücretsiz ve anahtarsız kullanmak için LibreTranslate'i kendi bilgisayarınızda/sunucunuzda çalıştırıp adresini girin (ör. docker run -p 5000:5000 libretranslate/libretranslate).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Button(
+                        onClick = onTestAiConnectionClick,
+                        enabled = libreEndpointDraft.isNotBlank() && uiState.aiTestState !is AiTestState.Testing,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("test_libre_connection_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = libreAccent,
+                            contentColor = Color(0xFF04150F)
+                        )
+                    ) {
+                        if (uiState.aiTestState is AiTestState.Testing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color(0xFF04150F)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("LibreTranslate Test Ediliyor…", style = MaterialTheme.typography.labelLarge)
+                        } else {
+                            Text("LibreTranslate Bağlantısını Test Et", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+
+                    when (val test = uiState.aiTestState) {
+                        is AiTestState.Success -> {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = EmeraldSuccess.copy(alpha = 0.14f),
+                                border = BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.4f))
+                            ) {
+                                Text(
+                                    text = "LibreTranslate Test Başarılı: \"${test.sampleOutput}\"",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = EmeraldSuccess,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp)
+                                )
+                            }
+                        }
+                        is AiTestState.Error -> {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
+                            ) {
+                                Text(
+                                    text = test.message,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp)
+                                )
                             }
                         }
                         else -> Unit
@@ -1895,12 +2047,14 @@ private fun SubtitleHistoryCard(entry: SubtitleEntry) {
                     entry.fromCache -> "ÖNBELLEK (${entry.engineMode.shortLabelTr})"
                     entry.engineMode == TranslationEngineMode.SMART_AI -> "AKILLI AI"
                     entry.engineMode == TranslationEngineMode.DEEPL -> "DEEPL"
+                    entry.engineMode == TranslationEngineMode.LIBRETRANSLATE -> "LIBRETRANSLATE"
                     else -> "HIZLI YEREL"
                 }
                 val badgeColor = when {
                     entry.fromCache -> EmeraldSuccess
                     entry.engineMode == TranslationEngineMode.SMART_AI -> AmberTertiary
                     entry.engineMode == TranslationEngineMode.DEEPL -> Color(0xFF38BDF8)
+                    entry.engineMode == TranslationEngineMode.LIBRETRANSLATE -> Color(0xFF34D399)
                     else -> CyanPrimary
                 }
                 Text(

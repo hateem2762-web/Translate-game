@@ -37,6 +37,7 @@
     <string name="engine_mode_offline">Hızlı Yerel</string>
     <string name="engine_mode_ai">Akıllı AI</string>
     <string name="engine_mode_deepl">DeepL</string>
+    <string name="engine_mode_libre">Libre</string>
     <string name="tab_controls">Kontrol</string>
     <string name="tab_sandbox">Canlı Test</string>
     <string name="sandbox_en_sample">The ancient seal is breaking! Find the key before the shadow consumes the village.</string>

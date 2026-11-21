@@ -415,6 +415,7 @@ class SubtitleHudOverlayView(
         val engineAccentHex = when (telemetry.engineMode) {
             TranslationEngineMode.SMART_AI -> "#F59E0B"
             TranslationEngineMode.DEEPL -> "#38BDF8"
+            TranslationEngineMode.LIBRETRANSLATE -> "#34D399"
             TranslationEngineMode.OFFLINE_LOCAL -> "#22D3EE"
         }
         val engineHighlighted = telemetry.engineMode != TranslationEngineMode.OFFLINE_LOCAL

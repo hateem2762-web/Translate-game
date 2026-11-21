@@ -23,6 +23,7 @@ import com.example.data.local.SubLensDatabase
 import com.example.data.preferences.SettingsDataStore
 import com.example.data.repository.TranslationCacheRepository
 import com.example.engine.DeepLTranslationProvider
+import com.example.engine.LibreTranslateProvider
 import com.example.engine.MlKitOcrEngine
 import com.example.engine.MlKitTranslatorEngine
 import com.example.engine.OfflineMlKitTranslationProvider
@@ -54,6 +55,7 @@ class ScreenTranslatorService : Service() {
     private lateinit var offlineProvider: OfflineMlKitTranslationProvider
     private lateinit var smartAiProvider: SmartAiTranslationProvider
     private lateinit var deeplProvider: DeepLTranslationProvider
+    private lateinit var libreProvider: LibreTranslateProvider
     private lateinit var pipeline: SubtitlePipeline
     private lateinit var captureManager: ScreenCaptureManager
     private lateinit var overlayController: OverlayController
@@ -73,6 +75,7 @@ class ScreenTranslatorService : Service() {
         offlineProvider = OfflineMlKitTranslationProvider(MlKitTranslatorEngine())
         smartAiProvider = SmartAiTranslationProvider(applicationContext)
         deeplProvider = DeepLTranslationProvider()
+        libreProvider = LibreTranslateProvider()
 
         pipeline = SubtitlePipeline(
             scope = serviceScope,
@@ -80,7 +83,8 @@ class ScreenTranslatorService : Service() {
             providers = mapOf(
                 TranslationEngineMode.OFFLINE_LOCAL to offlineProvider,
                 TranslationEngineMode.SMART_AI to smartAiProvider,
-                TranslationEngineMode.DEEPL to deeplProvider
+                TranslationEngineMode.DEEPL to deeplProvider,
+                TranslationEngineMode.LIBRETRANSLATE to libreProvider
             ),
             cacheStore = cacheRepository
         )
@@ -474,6 +478,7 @@ class ScreenTranslatorService : Service() {
         offlineProvider.close()
         smartAiProvider.close()
         deeplProvider.close()
+        libreProvider.close()
         ServiceStateHolder.markStopped()
         serviceScope.cancel()
         super.onDestroy()

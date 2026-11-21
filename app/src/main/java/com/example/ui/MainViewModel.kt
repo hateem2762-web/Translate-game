@@ -17,6 +17,7 @@ import com.example.engine.BlurMaskHelper
 import com.example.engine.BlurredPatchResult
 import com.example.engine.BoundingBoxStabilizer
 import com.example.engine.DeepLTranslationProvider
+import com.example.engine.LibreTranslateProvider
 import com.example.engine.MlKitOcrEngine
 import com.example.engine.MlKitTranslatorEngine
 import com.example.engine.OfflineMlKitTranslationProvider
@@ -111,6 +112,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val offlineTranslator = OfflineMlKitTranslationProvider(translatorEngine)
     private val smartAiTester = SmartAiTranslationProvider(appContext)
     private val deeplTranslator = DeepLTranslationProvider()
+    private val libreTranslator = LibreTranslateProvider()
     private val sandboxOcrEngine = MlKitOcrEngine()
 
     private val screenBounds = ScreenMetricsHelper.getScreenBounds(appContext)
@@ -129,6 +131,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _aiEndpointDraft = MutableStateFlow(AiProviderPreset.GEMINI_FLASH.defaultBaseUrl)
     val aiEndpointDraft: StateFlow<String> = _aiEndpointDraft.asStateFlow()
+
+    private val _libreEndpointDraft = MutableStateFlow(TranslationConfig.DEFAULT_LIBRE_ENDPOINT)
+    val libreEndpointDraft: StateFlow<String> = _libreEndpointDraft.asStateFlow()
+
+    private val _libreApiKeyDraft = MutableStateFlow("")
+    val libreApiKeyDraft: StateFlow<String> = _libreApiKeyDraft.asStateFlow()
 
     val uiState: StateFlow<MainUiState> = combine(
         permissionState,
@@ -179,6 +187,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _aiApiKeyDraft.value = initialConfig.aiApiKey
             _aiModelDraft.value = initialConfig.aiModelName
             _aiEndpointDraft.value = initialConfig.aiEndpointUrl
+            _libreEndpointDraft.value = initialConfig.libreEndpointUrl
+            _libreApiKeyDraft.value = initialConfig.libreApiKey
 
             settingsStore.configFlow.collect { config ->
                 checkModelAvailability(config.sourceLangCode, config.targetLangCode)
@@ -326,19 +336,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { settingsStore.updateAiEndpointUrl(sanitized) }
     }
 
+    fun onLibreEndpointChanged(newEndpoint: String) {
+        val sanitized = newEndpoint.trim()
+        _libreEndpointDraft.value = sanitized
+        aiTestStatusState.value = AiTestState.Idle
+        viewModelScope.launch { settingsStore.updateLibreEndpointUrl(sanitized) }
+    }
+
+    fun onLibreApiKeyChanged(newKey: String) {
+        val sanitized = newKey.trim()
+        _libreApiKeyDraft.value = sanitized
+        aiTestStatusState.value = AiTestState.Idle
+        viewModelScope.launch { settingsStore.updateLibreApiKey(sanitized) }
+    }
+
+    private fun TranslationConfig.withDrafts(): TranslationConfig = copy(
+        aiApiKey = _aiApiKeyDraft.value.trim(),
+        aiModelName = _aiModelDraft.value.trim(),
+        aiEndpointUrl = _aiEndpointDraft.value.trim(),
+        libreEndpointUrl = _libreEndpointDraft.value.trim(),
+        libreApiKey = _libreApiKeyDraft.value.trim()
+    )
+
     fun testAiConnection() {
-        val currentConfig = uiState.value.config.copy(
-            aiApiKey = _aiApiKeyDraft.value.trim(),
-            aiModelName = _aiModelDraft.value.trim(),
-            aiEndpointUrl = _aiEndpointDraft.value.trim()
-        )
+        val currentConfig = uiState.value.config.withDrafts()
         aiTestStatusState.value = AiTestState.Testing
         viewModelScope.launch {
             try {
-                val translated = if (currentConfig.engineMode == TranslationEngineMode.DEEPL) {
-                    deeplTranslator.testConnection("Hello hero, ready for battle?", currentConfig)
-                } else {
-                    smartAiTester.testConnection("Hello hero, ready for battle?", currentConfig)
+                val sample = "Hello hero, ready for battle?"
+                val translated = when (currentConfig.engineMode) {
+                    TranslationEngineMode.DEEPL -> deeplTranslator.testConnection(sample, currentConfig)
+                    TranslationEngineMode.LIBRETRANSLATE -> libreTranslator.testConnection(sample, currentConfig)
+                    else -> smartAiTester.testConnection(sample, currentConfig)
                 }
                 aiTestStatusState.value = AiTestState.Success(translated)
             } catch (e: CancellationException) {
@@ -375,11 +404,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun runSandboxTranslation(sceneBitmap: Bitmap) {
-        val config = uiState.value.config.copy(
-            aiApiKey = _aiApiKeyDraft.value.trim(),
-            aiModelName = _aiModelDraft.value.trim(),
-            aiEndpointUrl = _aiEndpointDraft.value.trim()
-        )
+        val config = uiState.value.config.withDrafts()
         val preset = sandboxStatusState.value.selectedPreset
         val effectiveConfig = config.copy(sourceLangCode = preset.sourceLangCode)
         val isChinese = effectiveConfig.sourceLangCode == TranslateLanguage.CHINESE
@@ -407,6 +432,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val provider = when (effectiveConfig.engineMode) {
                     TranslationEngineMode.SMART_AI -> smartAiTester
                     TranslationEngineMode.DEEPL -> deeplTranslator
+                    TranslationEngineMode.LIBRETRANSLATE -> libreTranslator
                     TranslationEngineMode.OFFLINE_LOCAL -> offlineTranslator
                 }
 
@@ -521,6 +547,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         translatorEngine.close()
         smartAiTester.close()
         deeplTranslator.close()
+        libreTranslator.close()
         super.onCleared()
     }
 }
