@@ -223,8 +223,7 @@ class SubtitlePipelineTest {
         assertEquals("TR:Open the gate\nTR:Find the key", pipeline.output.value.translatedText)
 
         // Re-appearing same multi-block dialogue hits cache with zero API calls
-        pipeline.processRecognizedResult(simpleResult(""), null, config)
-        pipeline.processRecognizedResult(simpleResult(""), null, config)
+        repeat(4) { pipeline.processRecognizedResult(simpleResult(""), null, config) }
         pipeline.processRecognizedResult(multiBlockResult, null, config)
         advanceTimeBy(200L)
         runCurrent()
@@ -261,5 +260,208 @@ class SubtitlePipelineTest {
         advanceTimeBy(200L)
         runCurrent()
         assertEquals("TR:古老的封印正在碎裂！", pipeline.output.value.translatedText)
+    }
+
+    @Test
+    fun `bounding box stabilizer locks jitter within deadband and smooths genuine drift`() {
+        val stabilizer = com.example.engine.BoundingBoxStabilizer(
+            originDeadbandPx = 14,
+            sizeDeadbandPx = 18,
+            emaAlpha = 0.25f
+        )
+
+        val initial = listOf(OcrBlock("Defeat the shadow", RoiRect(100, 400, 320, 44)))
+        val firstOut = stabilizer.stabilize(initial, isChinese = false)
+        assertEquals(RoiRect(100, 400, 320, 44), firstOut.first().boundingBox)
+
+        // Sub-deadband jitter (5px shift) -> exact same coordinates returned
+        val jittered = listOf(OcrBlock("Defeat the shadow", RoiRect(105, 404, 326, 48)))
+        val secondOut = stabilizer.stabilize(jittered, isChinese = false)
+        assertEquals(RoiRect(100, 400, 320, 44), secondOut.first().boundingBox)
+
+        // New text with moderate drift (40px) -> smoothly interpolated instead of full jump
+        val drifted = listOf(OcrBlock("A completely different dialogue", RoiRect(140, 440, 360, 50)))
+        val thirdOut = stabilizer.stabilize(drifted, isChinese = false)
+        assertTrue(thirdOut.first().boundingBox.x in 105..120)
+        assertTrue(thirdOut.first().boundingBox.y in 405..420)
+    }
+
+    @Test
+    fun `minor single-character OCR flicker does not re-trigger translation`() = runTest {
+        val ai = FakeProvider(TranslationEngineMode.SMART_AI, "TR")
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(TranslationEngineMode.SMART_AI to ai),
+            cacheStore = InMemoryCacheStore()
+        )
+        val config = TranslationConfig(
+            debounceMs = 200L,
+            displayMode = DisplayMode.IN_PLACE_BLUR,
+            engineMode = TranslationEngineMode.SMART_AI
+        )
+
+        pipeline.processRecognizedResult(simpleResult("Defeat the ancient dragon now!"), null, config)
+        advanceTimeBy(200L)
+        runCurrent()
+        assertEquals(1, ai.translateCalls)
+
+        // Single punctuation/character OCR noise flicker -> must stay locked, zero extra API calls
+        pipeline.processRecognizedResult(simpleResult("Defeat the ancient dragon now."), null, config)
+        advanceTimeBy(400L)
+        runCurrent()
+        assertEquals(1, ai.translateCalls)
+        assertEquals("TR:Defeat the ancient dragon now!", pipeline.output.value.translatedText)
+    }
+
+    @Test
+    fun `in place blur keeps subtitle visible during transient blank frames and clears after 4 blanks`() = runTest {
+        val ai = FakeProvider(TranslationEngineMode.SMART_AI, "TR")
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(TranslationEngineMode.SMART_AI to ai),
+            cacheStore = InMemoryCacheStore()
+        )
+        val config = TranslationConfig(
+            debounceMs = 200L,
+            displayMode = DisplayMode.IN_PLACE_BLUR,
+            engineMode = TranslationEngineMode.SMART_AI
+        )
+
+        pipeline.processRecognizedResult(simpleResult("Hold the gate!"), null, config)
+        advanceTimeBy(200L)
+        runCurrent()
+        assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+
+        // 3 transient blank frames must NOT clear the active In-Place Blur overlay (prevents flicker)
+        repeat(3) {
+            pipeline.processRecognizedResult(simpleResult(""), null, config)
+            assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+        }
+
+        // 4th consecutive blank frame clears cleanly when dialogue actually ends
+        pipeline.processRecognizedResult(simpleResult(""), null, config)
+        assertEquals(0, pipeline.output.value.inPlaceBlocks.size)
+    }
+
+    @Test
+    fun `service state holder keeps 30 chronological entries and deduplicates consecutive repeats`() {
+        com.example.service.ServiceStateHolder.clearHistory()
+
+        com.example.service.ServiceStateHolder.pushCompletedEntry(
+            com.example.model.SubtitleEntry("Line 1", "Satır 1", false, 20L)
+        )
+        // Consecutive identical text (different spacing/case) must be ignored
+        com.example.service.ServiceStateHolder.pushCompletedEntry(
+            com.example.model.SubtitleEntry("  line   1 ", "Satır 1", true, 5L)
+        )
+        assertEquals(1, com.example.service.ServiceStateHolder.telemetry.value.recentEntries.size)
+
+        for (i in 2..35) {
+            com.example.service.ServiceStateHolder.pushCompletedEntry(
+                com.example.model.SubtitleEntry("Line $i", "Satır $i", false, 10L)
+            )
+        }
+        val entries = com.example.service.ServiceStateHolder.telemetry.value.recentEntries
+        assertEquals(30, entries.size)
+        assertEquals("Line 6", entries.first().sourceText)
+        assertEquals("Line 35", entries.last().sourceText)
+
+        com.example.service.ServiceStateHolder.clearHistory()
+        assertTrue(com.example.service.ServiceStateHolder.telemetry.value.recentEntries.isEmpty())
+    }
+
+    @Test
+    fun `in place layout solver eliminates overlap across 3 tightly stacked lines`() {
+        val gap = 6f
+        val rects = listOf(
+            com.example.overlay.InPlaceLayoutSolver.MutableRect(left = 20f, top = 20f, width = 300f, height = 56f),
+            com.example.overlay.InPlaceLayoutSolver.MutableRect(left = 24f, top = 50f, width = 300f, height = 56f),
+            com.example.overlay.InPlaceLayoutSolver.MutableRect(left = 18f, top = 82f, width = 300f, height = 56f)
+        )
+
+        val fits = com.example.overlay.InPlaceLayoutSolver.resolveVerticalCollisions(
+            rects = rects,
+            minGapPx = gap,
+            minTop = 4f,
+            maxBottom = 260f
+        )
+
+        assertTrue(fits)
+        assertTrue(rects[0].bottom + gap <= rects[1].top + 0.01f)
+        assertTrue(rects[1].bottom + gap <= rects[2].top + 0.01f)
+        assertTrue(rects.minOf { it.top } >= 4f)
+        assertTrue(rects.maxOf { it.bottom } <= 260f + 0.5f)
+    }
+
+    @Test
+    fun `in place layout solver pulls stack upward when 3 lines hit bottom edge`() {
+        val gap = 4f
+        val rects = listOf(
+            com.example.overlay.InPlaceLayoutSolver.MutableRect(left = 16f, top = 120f, width = 280f, height = 44f),
+            com.example.overlay.InPlaceLayoutSolver.MutableRect(left = 16f, top = 152f, width = 280f, height = 44f),
+            com.example.overlay.InPlaceLayoutSolver.MutableRect(left = 16f, top = 152f, width = 280f, height = 44f)
+        )
+
+        val fits = com.example.overlay.InPlaceLayoutSolver.resolveVerticalCollisions(
+            rects = rects,
+            minGapPx = gap,
+            minTop = 4f,
+            maxBottom = 200f
+        )
+
+        assertTrue(fits)
+        assertTrue(rects[0].bottom + gap <= rects[1].top + 0.01f)
+        assertTrue(rects[1].bottom + gap <= rects[2].top + 0.01f)
+        assertTrue(rects[2].bottom <= 200f + 0.5f)
+    }
+
+    @Test
+    fun `deepl provider resolves free vs pro endpoints, maps languages, and routes via pipeline`() = runTest {
+        assertFalse(com.example.engine.DeepLTranslationProvider.isValidKey(""))
+        assertFalse(
+            com.example.engine.DeepLTranslationProvider.isValidKey(
+                com.example.engine.DeepLTranslationProvider.DEFAULT_PLACEHOLDER
+            )
+        )
+        assertTrue(com.example.engine.DeepLTranslationProvider.isValidKey("abc123:fx"))
+        assertEquals(
+            "https://api-free.deepl.com/v2/translate",
+            com.example.engine.DeepLTranslationProvider.resolveEndpoint("abc123:fx")
+        )
+        assertEquals(
+            "https://api.deepl.com/v2/translate",
+            com.example.engine.DeepLTranslationProvider.resolveEndpoint("abc123-pro-key")
+        )
+
+        assertEquals("EN", com.example.engine.DeepLTranslationProvider.mapSourceLang(TranslateLanguage.ENGLISH))
+        assertEquals("EN-US", com.example.engine.DeepLTranslationProvider.mapTargetLang(TranslateLanguage.ENGLISH))
+        assertEquals("ZH", com.example.engine.DeepLTranslationProvider.mapSourceLang(TranslateLanguage.CHINESE))
+        assertEquals("TR", com.example.engine.DeepLTranslationProvider.mapTargetLang(TranslateLanguage.TURKISH))
+        assertEquals("PT-PT", com.example.engine.DeepLTranslationProvider.mapTargetLang(TranslateLanguage.PORTUGUESE))
+
+        val deeplFake = FakeProvider(TranslationEngineMode.DEEPL, "DL")
+        val offline = FakeProvider(TranslationEngineMode.OFFLINE_LOCAL, "LOC")
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(
+                TranslationEngineMode.OFFLINE_LOCAL to offline,
+                TranslationEngineMode.DEEPL to deeplFake
+            ),
+            cacheStore = InMemoryCacheStore()
+        )
+        val deeplConfig = TranslationConfig(
+            debounceMs = 150L,
+            engineMode = TranslationEngineMode.DEEPL
+        )
+        pipeline.processRecognizedResult(simpleResult("Defeat the boss"), null, deeplConfig)
+        advanceTimeBy(150L)
+        runCurrent()
+
+        assertEquals(1, deeplFake.translateCalls)
+        assertEquals(0, offline.translateCalls)
+        assertEquals("DL:Defeat the boss", pipeline.output.value.translatedText)
     }
 }

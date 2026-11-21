@@ -14,6 +14,9 @@ import android.media.projection.MediaProjectionManager
 import android.os.Handler
 import android.os.Looper
 import com.example.model.RoiRect
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.ByteBuffer
 
 /**
@@ -40,6 +43,12 @@ class ScreenCaptureManager(
     private var scratchRowBytes: ByteArray = ByteArray(0)
     private var scratchRoiBuffer: ByteBuffer? = null
     private var reusableBitmap: Bitmap? = null
+
+    @Volatile
+    private var nextFrameSignal: CompletableDeferred<Unit>? = null
+
+    @Volatile
+    private var lastImageTimestampNs: Long = 0L
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -79,7 +88,9 @@ class ScreenCaptureManager(
         dpi: Int
     ) {
         imageReader?.close()
-        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+        val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+        attachFrameListener(reader)
+        imageReader = reader
 
         virtualDisplay?.release()
         virtualDisplay = projection.createVirtualDisplay(
@@ -88,7 +99,7 @@ class ScreenCaptureManager(
             height,
             dpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader!!.surface,
+            reader.surface,
             null,
             mainHandler
         )
@@ -100,10 +111,48 @@ class ScreenCaptureManager(
         captureHeight = newHeight
         val oldReader = imageReader
         val newReader = ImageReader.newInstance(newWidth, newHeight, PixelFormat.RGBA_8888, 2)
+        attachFrameListener(newReader)
         imageReader = newReader
         virtualDisplay?.resize(newWidth, newHeight, densityDpi)
         virtualDisplay?.surface = newReader.surface
         oldReader?.close()
+    }
+
+    private fun attachFrameListener(reader: ImageReader) {
+        reader.setOnImageAvailableListener({
+            lastImageTimestampNs = System.nanoTime()
+            nextFrameSignal?.complete(Unit)
+        }, mainHandler)
+    }
+
+    /**
+     * Discards any stale frame sitting in the ImageReader buffer before a stealth capture pulse.
+     */
+    fun drainPendingFrame() {
+        runCatching { imageReader?.acquireLatestImage()?.close() }
+        val signal = CompletableDeferred<Unit>()
+        nextFrameSignal = signal
+    }
+
+    /**
+     * Waits only as long as needed (typically 1 vsync ~18-28ms) for a fresh clean frame after
+     * temporarily hiding the In-Place overlay, eliminating visible 100ms+ blinking.
+     */
+    suspend fun awaitAndCaptureStealthRoi(
+        roi: RoiRect,
+        minSettleMs: Long = 18L,
+        maxWaitMs: Long = 45L
+    ): Bitmap? {
+        delay(minSettleMs)
+        val signal = nextFrameSignal
+        if (signal != null && !signal.isCompleted) {
+            val remaining = (maxWaitMs - minSettleMs).coerceAtLeast(8L)
+            withTimeoutOrNull(remaining) {
+                signal.await()
+            }
+        }
+        nextFrameSignal = null
+        return captureCroppedRoi(roi)
     }
 
     /**

@@ -100,7 +100,6 @@ import com.example.model.DisplayMode
 import com.example.model.ModelDownloadState
 import com.example.model.ServiceStatus
 import com.example.model.SubtitleEntry
-import com.example.model.SubtitleFontSize
 import com.example.model.SupportedLanguage
 import com.example.model.TranslationEngineMode
 import com.example.ui.theme.AmberTertiary
@@ -131,7 +130,17 @@ fun MainScreen(
     onDownloadModelClick: () -> Unit,
     onSelectDisplayMode: (DisplayMode) -> Unit,
     onSelectEngineMode: (TranslationEngineMode) -> Unit,
-    onSelectFontSize: (SubtitleFontSize) -> Unit,
+    onFontSizeSpChange: (Float) -> Unit,
+    onInPlacePaddingXChange: (Float) -> Unit,
+    onInPlacePaddingYChange: (Float) -> Unit,
+    onInPlaceCornerRadiusChange: (Float) -> Unit,
+    onInPlaceOffsetXChange: (Float) -> Unit,
+    onInPlaceOffsetYChange: (Float) -> Unit,
+    onResetInPlaceTuning: () -> Unit,
+    onClassicBoxWidthChange: (Int) -> Unit,
+    onClassicBoxHeightChange: (Int) -> Unit,
+    onClassicBoxOpacityChange: (Float) -> Unit,
+    onResetClassicBoxLayout: () -> Unit,
     onSelectAiPreset: (AiProviderPreset) -> Unit,
     onAiApiKeyChange: (String) -> Unit,
     onAiModelChange: (String) -> Unit,
@@ -220,7 +229,17 @@ fun MainScreen(
                     onClearSandbox = onClearSandbox,
                     onSelectDisplayMode = onSelectDisplayMode,
                     onSelectEngineMode = onSelectEngineMode,
-                    onSelectFontSize = onSelectFontSize,
+                    onFontSizeSpChange = onFontSizeSpChange,
+                    onInPlacePaddingXChange = onInPlacePaddingXChange,
+                    onInPlacePaddingYChange = onInPlacePaddingYChange,
+                    onInPlaceCornerRadiusChange = onInPlaceCornerRadiusChange,
+                    onInPlaceOffsetXChange = onInPlaceOffsetXChange,
+                    onInPlaceOffsetYChange = onInPlaceOffsetYChange,
+                    onResetInPlaceTuning = onResetInPlaceTuning,
+                    onClassicBoxWidthChange = onClassicBoxWidthChange,
+                    onClassicBoxHeightChange = onClassicBoxHeightChange,
+                    onClassicBoxOpacityChange = onClassicBoxOpacityChange,
+                    onResetClassicBoxLayout = onResetClassicBoxLayout,
                     onDownloadModelClick = onDownloadModelClick,
                     onStartCaptureClick = onStartCaptureClick,
                     onStopCaptureClick = onStopCaptureClick
@@ -256,7 +275,17 @@ fun MainScreen(
                             aiEndpointDraft = aiEndpointDraft,
                             onSelectDisplayMode = onSelectDisplayMode,
                             onSelectEngineMode = onSelectEngineMode,
-                            onSelectFontSize = onSelectFontSize,
+                            onFontSizeSpChange = onFontSizeSpChange,
+                            onInPlacePaddingXChange = onInPlacePaddingXChange,
+                            onInPlacePaddingYChange = onInPlacePaddingYChange,
+                            onInPlaceCornerRadiusChange = onInPlaceCornerRadiusChange,
+                            onInPlaceOffsetXChange = onInPlaceOffsetXChange,
+                            onInPlaceOffsetYChange = onInPlaceOffsetYChange,
+                            onResetInPlaceTuning = onResetInPlaceTuning,
+                            onClassicBoxWidthChange = onClassicBoxWidthChange,
+                            onClassicBoxHeightChange = onClassicBoxHeightChange,
+                            onClassicBoxOpacityChange = onClassicBoxOpacityChange,
+                            onResetClassicBoxLayout = onResetClassicBoxLayout,
                             onSelectAiPreset = onSelectAiPreset,
                             onAiApiKeyChange = onAiApiKeyChange,
                             onAiModelChange = onAiModelChange,
@@ -307,7 +336,7 @@ fun MainScreen(
                             EmptyHistoryCard()
                         }
                     } else {
-                        items(uiState.telemetry.recentEntries) { entry ->
+                        items(uiState.telemetry.recentEntries.asReversed()) { entry ->
                             SubtitleHistoryCard(entry = entry)
                         }
                     }
@@ -506,6 +535,10 @@ private fun LaunchControlCard(
                 uiState.config.aiApiKey.isBlank()
             ) {
                 WarningBanner("Özel uç nokta seçili: Aşağıdaki Motor kartından API anahtarı girin.")
+            } else if (uiState.config.engineMode == TranslationEngineMode.DEEPL &&
+                !uiState.isDeepLConfigured
+            ) {
+                WarningBanner("DeepL seçili: AI Studio Secrets panelinden DEEPL_API_KEY değerini ekleyin.")
             }
 
             uiState.telemetry.errorMessage?.takeIf { it.isNotBlank() }?.let { errMsg ->
@@ -580,7 +613,17 @@ private fun DisplayAndEngineModeCard(
     aiEndpointDraft: String,
     onSelectDisplayMode: (DisplayMode) -> Unit,
     onSelectEngineMode: (TranslationEngineMode) -> Unit,
-    onSelectFontSize: (SubtitleFontSize) -> Unit,
+    onFontSizeSpChange: (Float) -> Unit,
+    onInPlacePaddingXChange: (Float) -> Unit,
+    onInPlacePaddingYChange: (Float) -> Unit,
+    onInPlaceCornerRadiusChange: (Float) -> Unit,
+    onInPlaceOffsetXChange: (Float) -> Unit,
+    onInPlaceOffsetYChange: (Float) -> Unit,
+    onResetInPlaceTuning: () -> Unit,
+    onClassicBoxWidthChange: (Int) -> Unit,
+    onClassicBoxHeightChange: (Int) -> Unit,
+    onClassicBoxOpacityChange: (Float) -> Unit,
+    onResetClassicBoxLayout: () -> Unit,
     onSelectAiPreset: (AiProviderPreset) -> Unit,
     onAiApiKeyChange: (String) -> Unit,
     onAiModelChange: (String) -> Unit,
@@ -657,7 +700,7 @@ private fun DisplayAndEngineModeCard(
                     text = if (uiState.config.displayMode == DisplayMode.IN_PLACE_BLUR) {
                         "Orijinal yazıyı koyu buzlu maskeyle gizleyip çeviriyi tam üzerine yerleştirir; ayrı kutu gizlenir ve köşe kontrol butonu görünür."
                     } else {
-                        "Çeviriyi ekranın üstünde veya altında ayrı koyu kutuda gösterir."
+                        "Çeviriyi ekranın üstünde veya altında köşesinden boyutlandırılabilir koyu kutuda gösterir."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -666,41 +709,164 @@ private fun DisplayAndEngineModeCard(
 
             HorizontalDivider(color = ObsidianOutline)
 
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = "Altyazı Yazı Boyutu",
-                    style = MaterialTheme.typography.labelLarge
-                )
-                SingleChoiceSegmentedButtonRow(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    SubtitleFontSize.entries.forEachIndexed { index, fontSize ->
-                        SegmentedButton(
-                            selected = uiState.config.fontSize == fontSize,
-                            onClick = { onSelectFontSize(fontSize) },
-                            shape = SegmentedButtonDefaults.itemShape(
-                                index = index,
-                                count = SubtitleFontSize.entries.size
-                            ),
-                            modifier = Modifier
-                                .height(48.dp)
-                                .testTag("font_size_${fontSize.name.lowercase()}"),
-                            colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = CyanContainer,
-                                activeContentColor = CyanPrimary,
-                                inactiveContainerColor = ObsidianSurfaceElevated,
-                                inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        ) {
+            SliderSettingRow(
+                title = "Altyazı Yazı Boyutu (Hassas)",
+                subtitle = "12sp – 32sp arası hem canlı katmana hem Canlı Test önizlemesine anında uygulanır",
+                valueLabel = "${uiState.config.fontSizeSp.roundToInt()} sp",
+                value = uiState.config.fontSizeSp,
+                valueRange = 12f..32f,
+                steps = 19,
+                testTag = "font_size_slider",
+                onValueChange = { onFontSizeSpChange(it.roundToInt().toFloat()) }
+            )
+
+            HorizontalDivider(color = ObsidianOutline)
+
+            if (uiState.config.displayMode == DisplayMode.IN_PLACE_BLUR) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = fontSize.displayNameTr,
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1,
-                                softWrap = false,
-                                overflow = TextOverflow.Ellipsis
+                                text = "Doğal Blur Alanı İnce Ayarı",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = CyanPrimary
+                            )
+                            Text(
+                                text = "Taşan köşeleri ve konum kaymasını milimetrik hizalayın",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        TextButton(
+                            onClick = onResetInPlaceTuning,
+                            modifier = Modifier.testTag("reset_in_place_tuning_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Sıfırla")
+                        }
                     }
+
+                    SliderSettingRow(
+                        title = "Yatay Dolgu (Padding X)",
+                        subtitle = "Sağ ve sol kenar genişletme miktarı",
+                        valueLabel = "${uiState.config.inPlacePaddingXdp.roundToInt()} dp",
+                        value = uiState.config.inPlacePaddingXdp,
+                        valueRange = -4f..28f,
+                        steps = 31,
+                        testTag = "in_place_padding_x_slider",
+                        onValueChange = { onInPlacePaddingXChange(it.roundToInt().toFloat()) }
+                    )
+                    SliderSettingRow(
+                        title = "Dikey Dolgu (Padding Y)",
+                        subtitle = "Üst ve alt kenar genişletme miktarı",
+                        valueLabel = "${uiState.config.inPlacePaddingYdp.roundToInt()} dp",
+                        value = uiState.config.inPlacePaddingYdp,
+                        valueRange = -4f..22f,
+                        steps = 25,
+                        testTag = "in_place_padding_y_slider",
+                        onValueChange = { onInPlacePaddingYChange(it.roundToInt().toFloat()) }
+                    )
+                    SliderSettingRow(
+                        title = "Köşe Yuvarlatma (Radius)",
+                        subtitle = "0dp keskin köşe, 28dp yumuşak kapsül",
+                        valueLabel = "${uiState.config.inPlaceCornerRadiusDp.roundToInt()} dp",
+                        value = uiState.config.inPlaceCornerRadiusDp,
+                        valueRange = 0f..28f,
+                        steps = 27,
+                        testTag = "in_place_corner_radius_slider",
+                        onValueChange = { onInPlaceCornerRadiusChange(it.roundToInt().toFloat()) }
+                    )
+                    SliderSettingRow(
+                        title = "Yatay Kaydırma (Offset X)",
+                        subtitle = "Blur katmanını sola (-) veya sağa (+) kaydır",
+                        valueLabel = "${uiState.config.inPlaceOffsetXdp.roundToInt()} dp",
+                        value = uiState.config.inPlaceOffsetXdp,
+                        valueRange = -30f..30f,
+                        steps = 59,
+                        testTag = "in_place_offset_x_slider",
+                        onValueChange = { onInPlaceOffsetXChange(it.roundToInt().toFloat()) }
+                    )
+                    SliderSettingRow(
+                        title = "Dikey Kaydırma (Offset Y)",
+                        subtitle = "Blur katmanını yukarı (-) veya aşağı (+) kaydır",
+                        valueLabel = "${uiState.config.inPlaceOffsetYdp.roundToInt()} dp",
+                        value = uiState.config.inPlaceOffsetYdp,
+                        valueRange = -30f..30f,
+                        steps = 59,
+                        testTag = "in_place_offset_y_slider",
+                        onValueChange = { onInPlaceOffsetYChange(it.roundToInt().toFloat()) }
+                    )
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Klasik Kutu Boyutu & Konumu",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = CyanPrimary
+                            )
+                            Text(
+                                text = "Ekran üstündeki kutuyu sağ alt köşesinden de çekip boyutlandırabilirsiniz",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = onResetClassicBoxLayout,
+                            modifier = Modifier.testTag("reset_classic_box_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Sıfırla")
+                        }
+                    }
+                    SliderSettingRow(
+                        title = "Kutu Genişliği",
+                        subtitle = "Metin satırları kutu genişliğine göre otomatik kaydırılır",
+                        valueLabel = "${uiState.config.classicBoxWidthDp} dp",
+                        value = uiState.config.classicBoxWidthDp.toFloat(),
+                        valueRange = 200f..440f,
+                        steps = 23,
+                        testTag = "classic_box_width_slider",
+                        onValueChange = { onClassicBoxWidthChange((it / 10f).roundToInt() * 10) }
+                    )
+                    SliderSettingRow(
+                        title = "Kutu Yüksekliği",
+                        subtitle = "Uzun diyaloglarda kutu içi dikey kaydırma aktif olur",
+                        valueLabel = "${uiState.config.classicBoxHeightDp} dp",
+                        value = uiState.config.classicBoxHeightDp.toFloat(),
+                        valueRange = 84f..340f,
+                        steps = 0,
+                        testTag = "classic_box_height_slider",
+                        onValueChange = { onClassicBoxHeightChange((it / 8f).roundToInt() * 8) }
+                    )
+                    SliderSettingRow(
+                        title = "Kutu Arka Plan Görünürlüğü (Opaklık)",
+                        subtitle = "Yalnızca kutu arka planı ve kenarlığı saydamlaşır; yazı %100 görünür ve konturlu kalır",
+                        valueLabel = "%${(uiState.config.classicBoxOpacity * 100).roundToInt()}",
+                        value = uiState.config.classicBoxOpacity,
+                        valueRange = 0f..1f,
+                        testTag = "classic_box_opacity_slider",
+                        onValueChange = onClassicBoxOpacityChange
+                    )
                 }
             }
 
@@ -725,10 +891,10 @@ private fun DisplayAndEngineModeCard(
                             ),
                             icon = {
                                 Icon(
-                                    imageVector = if (mode == TranslationEngineMode.OFFLINE_LOCAL) {
-                                        Icons.Rounded.OfflineBolt
-                                    } else {
-                                        Icons.Rounded.AutoAwesome
+                                    imageVector = when (mode) {
+                                        TranslationEngineMode.OFFLINE_LOCAL -> Icons.Rounded.OfflineBolt
+                                        TranslationEngineMode.SMART_AI -> Icons.Rounded.AutoAwesome
+                                        TranslationEngineMode.DEEPL -> Icons.Rounded.Translate
                                     },
                                     contentDescription = null,
                                     modifier = Modifier.size(16.dp)
@@ -738,37 +904,41 @@ private fun DisplayAndEngineModeCard(
                                 .height(48.dp)
                                 .testTag("engine_mode_${mode.name.lowercase()}"),
                             colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = if (mode == TranslationEngineMode.SMART_AI) {
-                                    AmberTertiary.copy(alpha = 0.22f)
-                                } else {
-                                    CyanContainer
+                                activeContainerColor = when (mode) {
+                                    TranslationEngineMode.SMART_AI -> AmberTertiary.copy(alpha = 0.22f)
+                                    TranslationEngineMode.DEEPL -> Color(0xFF38BDF8).copy(alpha = 0.22f)
+                                    TranslationEngineMode.OFFLINE_LOCAL -> CyanContainer
                                 },
-                                activeContentColor = if (mode == TranslationEngineMode.SMART_AI) {
-                                    AmberTertiary
-                                } else {
-                                    CyanPrimary
+                                activeContentColor = when (mode) {
+                                    TranslationEngineMode.SMART_AI -> AmberTertiary
+                                    TranslationEngineMode.DEEPL -> Color(0xFF38BDF8)
+                                    TranslationEngineMode.OFFLINE_LOCAL -> CyanPrimary
                                 },
                                 inactiveContainerColor = ObsidianSurfaceElevated,
                                 inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         ) {
                             Text(
-                                text = if (mode == TranslationEngineMode.OFFLINE_LOCAL) {
-                                    stringResource(R.string.engine_mode_offline)
-                                } else {
-                                    stringResource(R.string.engine_mode_ai)
+                                text = when (mode) {
+                                    TranslationEngineMode.OFFLINE_LOCAL -> stringResource(R.string.engine_mode_offline)
+                                    TranslationEngineMode.SMART_AI -> stringResource(R.string.engine_mode_ai)
+                                    TranslationEngineMode.DEEPL -> stringResource(R.string.engine_mode_deepl)
                                 },
                                 maxLines = 1,
+                                softWrap = false,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
                 }
                 Text(
-                    text = if (uiState.config.engineMode == TranslationEngineMode.SMART_AI) {
-                        "Bağlam duyarlı LLM çevirisi (önbellek + sabitleme ile minimum kota tüketimi)."
-                    } else {
-                        "Sıfır internet gecikmesi ve sınırsız kullanım için cihaz içi ML Kit."
+                    text = when (uiState.config.engineMode) {
+                        TranslationEngineMode.SMART_AI ->
+                            "Bağlam duyarlı LLM çevirisi (önbellek + sabitleme ile minimum kota tüketimi)."
+                        TranslationEngineMode.DEEPL ->
+                            "Yüksek doğruluklu DeepL sinirsel makine çevirisi (toplu satır ve önbellek desteği)."
+                        TranslationEngineMode.OFFLINE_LOCAL ->
+                            "Sıfır internet gecikmesi ve sınırsız kullanım için cihaz içi ML Kit."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -998,6 +1168,168 @@ private fun DisplayAndEngineModeCard(
                                                 .fillMaxWidth()
                                                 .height(48.dp)
                                                 .testTag("switch_to_offline_from_quota"),
+                                            shape = RoundedCornerShape(10.dp),
+                                            border = BorderStroke(1.dp, CyanPrimary)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.OfflineBolt,
+                                                contentDescription = null,
+                                                tint = CyanPrimary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "Hızlı Yerel Moda Geç (Kotasız)",
+                                                color = CyanPrimary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        else -> Unit
+                    }
+                }
+            }
+
+            AnimatedVisibility(visible = uiState.config.engineMode == TranslationEngineMode.DEEPL) {
+                Column(
+                    modifier = Modifier.padding(top = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    HorizontalDivider(color = ObsidianOutline)
+                    val deeplAccent = Color(0xFF38BDF8)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "DeepL Çeviri Ayarları",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = deeplAccent
+                        )
+                        if (uiState.isDeepLConfigured) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.CheckCircle,
+                                    contentDescription = null,
+                                    tint = EmeraldSuccess,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (uiState.isDeepLFreeTier) "Free API (:fx) Hazır" else "Pro API Hazır",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = EmeraldSuccess
+                                )
+                            }
+                        }
+                    }
+
+                    if (uiState.isDeepLConfigured) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = EmeraldSuccess.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.35f))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.CheckCircle,
+                                    contentDescription = null,
+                                    tint = EmeraldSuccess,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (uiState.isDeepLFreeTier) {
+                                        "DEEPL_API_KEY aktif (api-free.deepl.com otomatik seçildi). Çok satırlı sahneler tek istekte çevrilir."
+                                    } else {
+                                        "DEEPL_API_KEY aktif (api.deepl.com Pro otomatik seçildi). Çok satırlı sahneler tek istekte çevrilir."
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = EmeraldSuccess
+                                )
+                            }
+                        }
+                    } else {
+                        WarningBanner(
+                            "DEEPL_API_KEY henüz yapılandırılmadı. AI Studio Secrets panelinden DEEPL_API_KEY değerini ekleyin (:fx ile biten ücretsiz veya Pro anahtar otomatik tanınır)."
+                        )
+                    }
+
+                    Button(
+                        onClick = onTestAiConnectionClick,
+                        enabled = uiState.isDeepLConfigured && uiState.aiTestState !is AiTestState.Testing,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("test_deepl_connection_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = deeplAccent,
+                            contentColor = Color(0xFF04131E)
+                        )
+                    ) {
+                        if (uiState.aiTestState is AiTestState.Testing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color(0xFF04131E)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("DeepL Test Ediliyor…", style = MaterialTheme.typography.labelLarge)
+                        } else {
+                            Text("DeepL Bağlantısını Test Et", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+
+                    when (val test = uiState.aiTestState) {
+                        is AiTestState.Success -> {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = EmeraldSuccess.copy(alpha = 0.14f),
+                                border = BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.4f))
+                            ) {
+                                Text(
+                                    text = "DeepL Test Başarılı: \"${test.sampleOutput}\"",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = EmeraldSuccess,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp)
+                                )
+                            }
+                        }
+                        is AiTestState.Error -> {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = test.message,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                    if (test.isQuotaError) {
+                                        OutlinedButton(
+                                            onClick = { onSelectEngineMode(TranslationEngineMode.OFFLINE_LOCAL) },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(48.dp)
+                                                .testTag("switch_to_offline_from_deepl_quota"),
                                             shape = RoundedCornerShape(10.dp),
                                             border = BorderStroke(1.dp, CyanPrimary)
                                         ) {
@@ -1330,8 +1662,8 @@ private fun PipelineTuningCard(
             )
 
             SliderSettingRow(
-                title = "Overlay / Maske Opaklığı",
-                subtitle = "Klasik kutu ve doğal buzlu maske koyuluğu",
+                title = "Doğal Blur Maske Koyuluğu",
+                subtitle = "Doğal Blur modundaki buzlu arka plan maskesinin koyuluğu",
                 valueLabel = "%${(uiState.config.overlayOpacity * 100).roundToInt()}",
                 value = uiState.config.overlayOpacity,
                 valueRange = 0.50f..0.95f,
@@ -1373,6 +1705,7 @@ private fun SliderSettingRow(
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     testTag: String,
+    steps: Int = 0,
     onValueChange: (Float) -> Unit
 ) {
     Column {
@@ -1400,6 +1733,7 @@ private fun SliderSettingRow(
             value = value.coerceIn(valueRange.start, valueRange.endInclusive),
             onValueChange = onValueChange,
             valueRange = valueRange,
+            steps = steps,
             modifier = Modifier.testTag(testTag),
             colors = SliderDefaults.colors(
                 thumbColor = CyanPrimary,
@@ -1531,7 +1865,7 @@ private fun EmptyHistoryCard() {
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "Çeviriyi başlattıktan sonra camgöbeği ROI çerçevesini oyunun diyalog alanına sürükleyip boyutlandırın. Yüzen kontrol panelinden Kutu/Doğal ve Yerel/AI arasında anlık geçiş yapabilirsiniz.",
+                text = "Çeviriyi başlattıktan sonra camgöbeği ROI çerçevesini oyunun diyalog alanına sürükleyip boyutlandırın. Yüzen kontrol panelinden Kutu/Doğal ve Yerel/AI/DeepL arasında anlık geçiş yapabilirsiniz.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1560,11 +1894,13 @@ private fun SubtitleHistoryCard(entry: SubtitleEntry) {
                 val badgeText = when {
                     entry.fromCache -> "ÖNBELLEK (${entry.engineMode.shortLabelTr})"
                     entry.engineMode == TranslationEngineMode.SMART_AI -> "AKILLI AI"
+                    entry.engineMode == TranslationEngineMode.DEEPL -> "DEEPL"
                     else -> "HIZLI YEREL"
                 }
                 val badgeColor = when {
                     entry.fromCache -> EmeraldSuccess
                     entry.engineMode == TranslationEngineMode.SMART_AI -> AmberTertiary
+                    entry.engineMode == TranslationEngineMode.DEEPL -> Color(0xFF38BDF8)
                     else -> CyanPrimary
                 }
                 Text(

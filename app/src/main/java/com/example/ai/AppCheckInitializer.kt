@@ -9,6 +9,7 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.recaptcha.RecaptchaAppCheckProviderFactory
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "AppCheckInit"
 
@@ -17,11 +18,18 @@ private const val DEBUG_STORE_PREFIX = "com.google.firebase.appcheck.debug.store
 private const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
 private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 
+private val appCheckInstalled = AtomicBoolean(false)
+
 @SuppressLint("ApplySharedPref")
-fun configureAppCheck(context: Context, intent: Intent?) {
-    try {
-        if (FirebaseApp.getApps(context).isEmpty()) {
-            FirebaseApp.initializeApp(context)
+fun configureAppCheck(context: Context, intent: Intent?): Boolean {
+    val appContext = context.applicationContext ?: context
+    return try {
+        if (FirebaseApp.getApps(appContext).isEmpty()) {
+            val initialized = FirebaseApp.initializeApp(appContext)
+            if (initialized == null && FirebaseApp.getApps(appContext).isEmpty()) {
+                Log.e(TAG, "FirebaseApp.initializeApp returned null (missing google-services.json / google_app_id).")
+                return false
+            }
         }
 
         if (BuildConfig.DEBUG) {
@@ -29,7 +37,7 @@ fun configureAppCheck(context: Context, intent: Intent?) {
 
             if (!debugToken.isNullOrEmpty()) {
                 val persistenceKey = FirebaseApp.getInstance().persistenceKey
-                val prefs = context.getSharedPreferences(
+                val prefs = appContext.getSharedPreferences(
                     "$DEBUG_STORE_PREFIX$persistenceKey",
                     Context.MODE_PRIVATE
                 )
@@ -38,22 +46,22 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                     .putString(DEBUG_SECRET_KEY, debugToken)
                     .commit()
                 Log.d(TAG, "App Check debug secret configured successfully.")
-            } else {
-                Log.w(TAG, "No debug token found in Intent extra.")
             }
 
-            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                DebugAppCheckProviderFactory.getInstance()
-            )
-            Log.d(TAG, "DebugAppCheckProviderFactory installed.")
-        } else {
-            val resId = context.resources.getIdentifier(
+            if (appCheckInstalled.compareAndSet(false, true)) {
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    DebugAppCheckProviderFactory.getInstance()
+                )
+                Log.d(TAG, "DebugAppCheckProviderFactory installed.")
+            }
+        } else if (appCheckInstalled.compareAndSet(false, true)) {
+            val resId = appContext.resources.getIdentifier(
                 RECAPTCHA_SITE_KEY_RES,
                 "string",
-                context.packageName
+                appContext.packageName
             )
             if (resId != 0) {
-                val siteKey = context.getString(resId)
+                val siteKey = appContext.getString(resId)
                 if (siteKey.isNotBlank()) {
                     FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
                         RecaptchaAppCheckProviderFactory.getInstance(siteKey)
@@ -66,7 +74,21 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                 Log.e(TAG, "recaptcha_site_key string resource not found in package.")
             }
         }
+        FirebaseApp.getApps(appContext).isNotEmpty()
     } catch (e: Exception) {
         Log.e(TAG, "Failed to initialize Firebase App Check", e)
+        false
     }
+}
+
+/**
+ * Safe idempotent guard called by background services or AI providers before accessing [Firebase.ai],
+ * preventing "Default FirebaseApp is not initialized" if a service starts before MainActivity.
+ */
+fun ensureFirebaseInitialized(context: Context): Boolean {
+    val appContext = context.applicationContext ?: context
+    if (FirebaseApp.getApps(appContext).isNotEmpty()) {
+        return true
+    }
+    return configureAppCheck(appContext, null)
 }

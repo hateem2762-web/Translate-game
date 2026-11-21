@@ -52,6 +52,7 @@ class SubtitlePipeline(
     private var lastRenderedCombined: String = ""
     private var consecutiveBlankFrames: Int = 0
     private var debounceJob: Job? = null
+    private val boxStabilizer = BoundingBoxStabilizer()
 
     fun reset() {
         debounceJob?.cancel()
@@ -63,18 +64,21 @@ class SubtitlePipeline(
         lastRenderedTranslations = emptySet()
         lastRenderedCombined = ""
         consecutiveBlankFrames = 0
+        boxStabilizer.reset()
         frameDiffer.reset()
         _output.value = PipelineOutput()
     }
 
     fun invalidateVisualCache() {
         frameDiffer.reset()
+        boxStabilizer.reset()
     }
 
     fun clearActiveSubtitle() {
         lastTranslatedSource = ""
         lastRenderedTranslations = emptySet()
         lastRenderedCombined = ""
+        boxStabilizer.reset()
         _output.value = _output.value.copy(
             translatedText = "",
             inPlaceBlocks = emptyList(),
@@ -114,9 +118,10 @@ class SubtitlePipeline(
         val normalized = normalizeText(ocrResult.fullText, isChinese)
         val current = _output.value
 
+        val blankClearThreshold = if (config.displayMode == DisplayMode.IN_PLACE_BLUR) 4 else 2
         if (normalized.isBlank()) {
             consecutiveBlankFrames++
-            if (consecutiveBlankFrames >= 2) {
+            if (consecutiveBlankFrames >= blankClearThreshold) {
                 debounceJob?.cancel()
                 debounceJob = null
                 pendingCandidate = ""
@@ -125,6 +130,7 @@ class SubtitlePipeline(
                 lastTranslatedSource = ""
                 lastRenderedTranslations = emptySet()
                 lastRenderedCombined = ""
+                boxStabilizer.reset()
                 if (config.displayMode == DisplayMode.IN_PLACE_BLUR && current.inPlaceBlocks.isNotEmpty()) {
                     _output.value = current.copy(
                         inPlaceBlocks = emptyList(),
@@ -155,7 +161,12 @@ class SubtitlePipeline(
             return
         }
 
-        if (normalized == lastTranslatedSource) {
+        // Exact match OR single-character OCR flicker when text hasn't genuinely changed -> lock everything
+        val isUnchangedOrMinorFlicker = normalized == lastTranslatedSource ||
+            (lastTranslatedSource.length >= 6 &&
+                normalized.length >= 6 &&
+                BoundingBoxStabilizer.textSimilarity(normalized, lastTranslatedSource) >= 0.88f)
+        if (isUnchangedOrMinorFlicker) {
             _output.value = current.copy(
                 framesProcessed = current.framesProcessed + 1,
                 framesSkipped = current.framesSkipped + 1,
@@ -170,7 +181,7 @@ class SubtitlePipeline(
         }
 
         pendingCandidate = normalized
-        pendingBlocks = ocrResult.blocks
+        pendingBlocks = boxStabilizer.stabilize(ocrResult.blocks, isChinese)
         recyclePendingSnapshot()
         if (config.displayMode == DisplayMode.IN_PLACE_BLUR && frameBitmap != null && !frameBitmap.isRecycled) {
             pendingSnapshot = runCatching {
@@ -209,6 +220,7 @@ class SubtitlePipeline(
             ?: providers[TranslationEngineMode.OFFLINE_LOCAL]
             ?: return
 
+        val isChinese = config.sourceLangCode == TranslateLanguage.CHINESE
         val startTime = System.currentTimeMillis()
         try {
             var anyCacheHit = false
@@ -218,7 +230,7 @@ class SubtitlePipeline(
             val combinedTranslated: String
 
             if (config.displayMode == DisplayMode.IN_PLACE_BLUR && blocks.size > 1) {
-                val normalizedBlocks = blocks.map { normalizeText(it.text) }
+                val normalizedBlocks = blocks.map { normalizeText(it.text, isChinese) }
                 val cachedTranslations = arrayOfNulls<String>(blocks.size)
                 val uncachedIndices = mutableListOf<Int>()
 
@@ -373,13 +385,23 @@ class SubtitlePipeline(
         if (lastRenderedCombined.isNotBlank() && lower == lastRenderedCombined) return true
         if (lastRenderedTranslations.contains(lower)) return true
 
-        // Fuzzy check if OCR read a partial slice of our own rendered Turkish overlay
-        if (lastRenderedCombined.length >= 8 &&
-            (lastRenderedCombined.contains(lower) || lower.contains(lastRenderedCombined))
-        ) {
-            val ratio = minOf(lower.length, lastRenderedCombined.length).toFloat() /
-                maxOf(lower.length, lastRenderedCombined.length).toFloat()
-            if (ratio >= 0.72f) return true
+        // Fuzzy check if OCR read a partial slice or minor variant of our own rendered overlay
+        if (lastRenderedCombined.length >= 6) {
+            if (lastRenderedCombined.contains(lower) || lower.contains(lastRenderedCombined)) {
+                val ratio = minOf(lower.length, lastRenderedCombined.length).toFloat() /
+                    maxOf(lower.length, lastRenderedCombined.length).toFloat()
+                if (ratio >= 0.68f) return true
+            }
+            if (BoundingBoxStabilizer.textSimilarity(lower, lastRenderedCombined) >= 0.72f) {
+                return true
+            }
+        }
+        for (renderedBlock in lastRenderedTranslations) {
+            if (renderedBlock.length >= 6 &&
+                BoundingBoxStabilizer.textSimilarity(lower, renderedBlock) >= 0.72f
+            ) {
+                return true
+            }
         }
         return false
     }

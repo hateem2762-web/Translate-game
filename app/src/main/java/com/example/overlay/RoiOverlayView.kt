@@ -22,7 +22,6 @@ import androidx.core.content.res.ResourcesCompat
 import com.example.R
 import com.example.model.InPlaceBlock
 import com.example.model.RoiRect
-import com.example.model.SubtitleFontSize
 
 /**
  * Draggable & resizable Region of Interest (ROI) viewfinder overlay.
@@ -113,8 +112,8 @@ class RoiOverlayView(
         reticleBox.setLocked(locked)
     }
 
-    fun updateInPlaceBlocks(blocks: List<InPlaceBlock>, fontSize: SubtitleFontSize = SubtitleFontSize.NORMAL) {
-        inPlaceLayer.setBlocks(blocks, fontSize)
+    fun updateInPlaceBlocks(blocks: List<InPlaceBlock>, style: InPlaceRenderStyle = InPlaceRenderStyle()) {
+        inPlaceLayer.setBlocks(blocks, style)
     }
 
     fun hasActiveInPlaceBlocks(): Boolean = inPlaceLayer.hasBlocks()
@@ -210,11 +209,11 @@ class RoiOverlayView(
     ) : View(context) {
         private val renderer = InPlaceCanvasRenderer(context)
         private var blocks: List<InPlaceBlock> = emptyList()
-        private var fontSize: SubtitleFontSize = SubtitleFontSize.NORMAL
+        private var style: InPlaceRenderStyle = InPlaceRenderStyle()
 
-        fun setBlocks(newBlocks: List<InPlaceBlock>, newFontSize: SubtitleFontSize) {
+        fun setBlocks(newBlocks: List<InPlaceBlock>, newStyle: InPlaceRenderStyle) {
             blocks = newBlocks
-            fontSize = newFontSize
+            style = newStyle
             invalidate()
         }
 
@@ -226,7 +225,7 @@ class RoiOverlayView(
             renderer.drawBlocks(
                 canvas = canvas,
                 blocks = blocks,
-                fontSize = fontSize,
+                style = style,
                 canvasWidth = width,
                 canvasHeight = height,
                 offsetX = insetCapturePx,

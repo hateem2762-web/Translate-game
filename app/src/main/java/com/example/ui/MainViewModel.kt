@@ -15,6 +15,8 @@ import com.example.data.preferences.SettingsDataStore
 import com.example.data.repository.TranslationCacheRepository
 import com.example.engine.BlurMaskHelper
 import com.example.engine.BlurredPatchResult
+import com.example.engine.BoundingBoxStabilizer
+import com.example.engine.DeepLTranslationProvider
 import com.example.engine.MlKitOcrEngine
 import com.example.engine.MlKitTranslatorEngine
 import com.example.engine.OfflineMlKitTranslationProvider
@@ -25,7 +27,6 @@ import com.example.model.DisplayMode
 import com.example.model.InPlaceBlock
 import com.example.model.ModelDownloadState
 import com.example.model.RoiRect
-import com.example.model.SubtitleFontSize
 import com.example.model.SupportedLanguage
 import com.example.model.TranslationConfig
 import com.example.model.TranslationEngineMode
@@ -58,14 +59,19 @@ enum class SandboxPreset(
     val sampleText: String
 ) {
     ENGLISH_RPG(
-        labelTr = "İngilizce Diyalog",
+        labelTr = "İngilizce",
         sourceLangCode = TranslateLanguage.ENGLISH,
         sampleText = "The ancient seal is breaking! Find the key before the shadow consumes the village."
     ),
     CHINESE_RPG(
-        labelTr = "Çince Diyalog",
+        labelTr = "Çince",
         sourceLangCode = TranslateLanguage.CHINESE,
         sampleText = "古老的封印正在碎裂！在黑暗吞噬村庄之前，快找到钥匙。"
+    ),
+    MULTI_LINE_RPG(
+        labelTr = "3 Satır",
+        sourceLangCode = TranslateLanguage.ENGLISH,
+        sampleText = "The ancient seal is breaking apart!\nFind the golden key in the ruins\nbefore darkness consumes this village."
     )
 }
 
@@ -89,7 +95,9 @@ data class MainUiState(
     val cacheCount: Int = 0,
     val telemetry: TranslatorTelemetry = TranslatorTelemetry(),
     val aiTestState: AiTestState = AiTestState.Idle,
-    val sandboxState: SandboxState = SandboxState()
+    val sandboxState: SandboxState = SandboxState(),
+    val isDeepLConfigured: Boolean = DeepLTranslationProvider.isApiKeyConfigured(),
+    val isDeepLFreeTier: Boolean = DeepLTranslationProvider.isFreeTierKey()
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -101,7 +109,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
     private val translatorEngine = MlKitTranslatorEngine()
     private val offlineTranslator = OfflineMlKitTranslationProvider(translatorEngine)
-    private val smartAiTester = SmartAiTranslationProvider()
+    private val smartAiTester = SmartAiTranslationProvider(appContext)
+    private val deeplTranslator = DeepLTranslationProvider()
     private val sandboxOcrEngine = MlKitOcrEngine()
 
     private val screenBounds = ScreenMetricsHelper.getScreenBounds(appContext)
@@ -237,11 +246,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateEngineMode(mode: TranslationEngineMode) {
+        aiTestStatusState.value = AiTestState.Idle
         viewModelScope.launch { settingsStore.updateEngineMode(mode) }
     }
 
-    fun updateFontSize(fontSize: SubtitleFontSize) {
-        viewModelScope.launch { settingsStore.updateFontSize(fontSize) }
+    fun updateFontSizeSp(fontSizeSp: Float) {
+        viewModelScope.launch { settingsStore.updateFontSizeSp(fontSizeSp) }
+    }
+
+    fun updateInPlacePaddingX(dp: Float) {
+        viewModelScope.launch { settingsStore.updateInPlacePaddingX(dp) }
+    }
+
+    fun updateInPlacePaddingY(dp: Float) {
+        viewModelScope.launch { settingsStore.updateInPlacePaddingY(dp) }
+    }
+
+    fun updateInPlaceCornerRadius(dp: Float) {
+        viewModelScope.launch { settingsStore.updateInPlaceCornerRadius(dp) }
+    }
+
+    fun updateInPlaceOffsetX(dp: Float) {
+        viewModelScope.launch { settingsStore.updateInPlaceOffsetX(dp) }
+    }
+
+    fun updateInPlaceOffsetY(dp: Float) {
+        viewModelScope.launch { settingsStore.updateInPlaceOffsetY(dp) }
+    }
+
+    fun resetInPlaceTuning() {
+        viewModelScope.launch { settingsStore.resetInPlaceTuning() }
+    }
+
+    fun updateClassicBoxWidthDp(widthDp: Int) {
+        viewModelScope.launch { settingsStore.updateClassicBoxWidthDp(widthDp) }
+    }
+
+    fun updateClassicBoxHeightDp(heightDp: Int) {
+        viewModelScope.launch { settingsStore.updateClassicBoxHeightDp(heightDp) }
+    }
+
+    fun updateClassicBoxOpacity(opacity: Float) {
+        viewModelScope.launch { settingsStore.updateClassicBoxOpacity(opacity) }
+    }
+
+    fun resetClassicBoxLayout() {
+        viewModelScope.launch { settingsStore.resetClassicBoxLayout() }
+    }
+
+    fun clearSessionHistory() {
+        ServiceStateHolder.clearHistory()
     }
 
     fun updateAiPreset(preset: AiProviderPreset) {
@@ -281,7 +335,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         aiTestStatusState.value = AiTestState.Testing
         viewModelScope.launch {
             try {
-                val translated = smartAiTester.testConnection("Hello hero, ready for battle?", currentConfig)
+                val translated = if (currentConfig.engineMode == TranslationEngineMode.DEEPL) {
+                    deeplTranslator.testConnection("Hello hero, ready for battle?", currentConfig)
+                } else {
+                    smartAiTester.testConnection("Hello hero, ready for battle?", currentConfig)
+                }
                 aiTestStatusState.value = AiTestState.Success(translated)
             } catch (e: CancellationException) {
                 throw e
@@ -346,19 +404,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                val provider = if (effectiveConfig.engineMode == TranslationEngineMode.SMART_AI) {
-                    smartAiTester
-                } else {
-                    offlineTranslator
+                val provider = when (effectiveConfig.engineMode) {
+                    TranslationEngineMode.SMART_AI -> smartAiTester
+                    TranslationEngineMode.DEEPL -> deeplTranslator
+                    TranslationEngineMode.OFFLINE_LOCAL -> offlineTranslator
                 }
+
+                val mergedBlocks = BoundingBoxStabilizer.mergeRowBlocks(ocrResult.blocks, isChinese)
 
                 val inPlaceBlocks: List<InPlaceBlock>
                 val combinedTranslated: String
 
-                if (ocrResult.blocks.size > 1) {
-                    val blockTexts = ocrResult.blocks.map { SubtitlePipeline.normalizeText(it.text, isChinese) }
+                if (mergedBlocks.size > 1) {
+                    val blockTexts = mergedBlocks.map { SubtitlePipeline.normalizeText(it.text, isChinese) }
                     val translatedLines = provider.translateBatch(blockTexts, effectiveConfig)
-                    inPlaceBlocks = ocrResult.blocks.mapIndexed { idx, block ->
+                    inPlaceBlocks = mergedBlocks.mapIndexed { idx, block ->
                         val translatedLine = translatedLines.getOrElse(idx) { "" }.trim()
                         val patchResult: BlurredPatchResult = withContext(Dispatchers.Default) {
                             BlurMaskHelper.createFrostedPatch(sceneBitmap, block.boundingBox, effectiveConfig.overlayOpacity)
@@ -375,7 +435,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     val normSource = SubtitlePipeline.normalizeText(ocrResult.fullText, isChinese)
                     combinedTranslated = provider.translate(normSource, effectiveConfig).trim()
-                    val firstBox = ocrResult.blocks.firstOrNull()?.boundingBox
+                    val firstBox = mergedBlocks.firstOrNull()?.boundingBox
                         ?: RoiRect(24, (sceneBitmap.height * 0.55f).toInt(), sceneBitmap.width - 48, 80)
                     val patchResult = withContext(Dispatchers.Default) {
                         BlurMaskHelper.createFrostedPatch(sceneBitmap, firstBox, effectiveConfig.overlayOpacity)
@@ -460,6 +520,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sandboxOcrEngine.close()
         translatorEngine.close()
         smartAiTester.close()
+        deeplTranslator.close()
         super.onCleared()
     }
 }

@@ -16,11 +16,13 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.ai.ensureFirebaseInitialized
 import com.example.capture.ScreenCaptureManager
 import com.example.capture.ScreenMetricsHelper
 import com.example.data.local.SubLensDatabase
 import com.example.data.preferences.SettingsDataStore
 import com.example.data.repository.TranslationCacheRepository
+import com.example.engine.DeepLTranslationProvider
 import com.example.engine.MlKitOcrEngine
 import com.example.engine.MlKitTranslatorEngine
 import com.example.engine.OfflineMlKitTranslationProvider
@@ -51,6 +53,7 @@ class ScreenTranslatorService : Service() {
     private lateinit var ocrEngine: MlKitOcrEngine
     private lateinit var offlineProvider: OfflineMlKitTranslationProvider
     private lateinit var smartAiProvider: SmartAiTranslationProvider
+    private lateinit var deeplProvider: DeepLTranslationProvider
     private lateinit var pipeline: SubtitlePipeline
     private lateinit var captureManager: ScreenCaptureManager
     private lateinit var overlayController: OverlayController
@@ -62,19 +65,22 @@ class ScreenTranslatorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        ensureFirebaseInitialized(applicationContext)
         settingsStore = SettingsDataStore(applicationContext)
         val db = SubLensDatabase.getInstance(applicationContext)
         cacheRepository = TranslationCacheRepository(db.translationCacheDao())
         ocrEngine = MlKitOcrEngine()
         offlineProvider = OfflineMlKitTranslationProvider(MlKitTranslatorEngine())
-        smartAiProvider = SmartAiTranslationProvider()
+        smartAiProvider = SmartAiTranslationProvider(applicationContext)
+        deeplProvider = DeepLTranslationProvider()
 
         pipeline = SubtitlePipeline(
             scope = serviceScope,
             ocrEngine = ocrEngine,
             providers = mapOf(
                 TranslationEngineMode.OFFLINE_LOCAL to offlineProvider,
-                TranslationEngineMode.SMART_AI to smartAiProvider
+                TranslationEngineMode.SMART_AI to smartAiProvider,
+                TranslationEngineMode.DEEPL to deeplProvider
             ),
             cacheStore = cacheRepository
         )
@@ -95,10 +101,21 @@ class ScreenTranslatorService : Service() {
                     settingsStore.saveRoi(newRoi)
                 }
             },
+            onClassicBoxLayoutChanged = { x, y, widthDp, heightDp ->
+                serviceScope.launch(Dispatchers.IO) {
+                    settingsStore.saveClassicBoxLayout(x, y, widthDp, heightDp)
+                }
+            },
             onToggleDisplayMode = { toggleDisplayMode() },
             onToggleEngineMode = { toggleEngineMode() },
             onTogglePause = { togglePause() },
             onToggleLockRoi = { toggleRoiLock() },
+            onOpenHistory = {
+                overlayController.showHistory(ServiceStateHolder.telemetry.value.recentEntries)
+            },
+            onClearHistory = {
+                ServiceStateHolder.clearHistory()
+            },
             onOpenSettings = { openMainApp() },
             onStopService = { stopAndCleanup() }
         )
@@ -119,12 +136,21 @@ class ScreenTranslatorService : Service() {
                     it.copy(
                         displayMode = config.displayMode,
                         engineMode = config.engineMode,
-                        fontSize = config.fontSize
+                        fontSizeSp = config.fontSizeSp,
+                        inPlacePaddingXdp = config.inPlacePaddingXdp,
+                        inPlacePaddingYdp = config.inPlacePaddingYdp,
+                        inPlaceCornerRadiusDp = config.inPlaceCornerRadiusDp,
+                        inPlaceOffsetXdp = config.inPlaceOffsetXdp,
+                        inPlaceOffsetYdp = config.inPlaceOffsetYdp,
+                        classicBoxWidthDp = config.classicBoxWidthDp,
+                        classicBoxHeightDp = config.classicBoxHeightDp,
+                        classicBoxX = config.classicBoxX,
+                        classicBoxY = config.classicBoxY,
+                        classicBoxOpacity = config.classicBoxOpacity
                     )
                 }
                 overlayController.updateHud(
                     telemetry = ServiceStateHolder.telemetry.value,
-                    opacity = config.overlayOpacity,
                     showOriginal = config.showOriginalText
                 )
             }
@@ -139,7 +165,17 @@ class ScreenTranslatorService : Service() {
                     prev.copy(
                         displayMode = currentConfig.displayMode,
                         engineMode = currentConfig.engineMode,
-                        fontSize = currentConfig.fontSize,
+                        fontSizeSp = currentConfig.fontSizeSp,
+                        inPlacePaddingXdp = currentConfig.inPlacePaddingXdp,
+                        inPlacePaddingYdp = currentConfig.inPlacePaddingYdp,
+                        inPlaceCornerRadiusDp = currentConfig.inPlaceCornerRadiusDp,
+                        inPlaceOffsetXdp = currentConfig.inPlaceOffsetXdp,
+                        inPlaceOffsetYdp = currentConfig.inPlaceOffsetYdp,
+                        classicBoxWidthDp = currentConfig.classicBoxWidthDp,
+                        classicBoxHeightDp = currentConfig.classicBoxHeightDp,
+                        classicBoxX = currentConfig.classicBoxX,
+                        classicBoxY = currentConfig.classicBoxY,
+                        classicBoxOpacity = currentConfig.classicBoxOpacity,
                         currentSourceText = out.sourceText,
                         currentTranslatedText = out.translatedText,
                         inPlaceBlocks = out.inPlaceBlocks,
@@ -154,7 +190,6 @@ class ScreenTranslatorService : Service() {
                 }
                 overlayController.updateHud(
                     telemetry = ServiceStateHolder.telemetry.value,
-                    opacity = currentConfig.overlayOpacity,
                     showOriginal = currentConfig.showOriginalText
                 )
             }
@@ -214,7 +249,7 @@ class ScreenTranslatorService : Service() {
                 val savedRoi = settingsStore.observeRoi(bounds.width, bounds.height).first()
                 currentConfig = settingsStore.configFlow.first()
 
-                overlayController.show(savedRoi, currentConfig.overlayOpacity)
+                overlayController.show(savedRoi, currentConfig)
                 captureManager.start(resultCode, resultData)
 
                 ServiceStateHolder.update {
@@ -222,14 +257,23 @@ class ScreenTranslatorService : Service() {
                         status = ServiceStatus.RUNNING,
                         displayMode = currentConfig.displayMode,
                         engineMode = currentConfig.engineMode,
-                        fontSize = currentConfig.fontSize,
+                        fontSizeSp = currentConfig.fontSizeSp,
+                        inPlacePaddingXdp = currentConfig.inPlacePaddingXdp,
+                        inPlacePaddingYdp = currentConfig.inPlacePaddingYdp,
+                        inPlaceCornerRadiusDp = currentConfig.inPlaceCornerRadiusDp,
+                        inPlaceOffsetXdp = currentConfig.inPlaceOffsetXdp,
+                        inPlaceOffsetYdp = currentConfig.inPlaceOffsetYdp,
+                        classicBoxWidthDp = currentConfig.classicBoxWidthDp,
+                        classicBoxHeightDp = currentConfig.classicBoxHeightDp,
+                        classicBoxX = currentConfig.classicBoxX,
+                        classicBoxY = currentConfig.classicBoxY,
+                        classicBoxOpacity = currentConfig.classicBoxOpacity,
                         isRoiLocked = false,
                         errorMessage = null
                     )
                 }
                 overlayController.updateHud(
                     telemetry = ServiceStateHolder.telemetry.value,
-                    opacity = currentConfig.overlayOpacity,
                     showOriginal = currentConfig.showOriginalText
                 )
 
@@ -254,21 +298,25 @@ class ScreenTranslatorService : Service() {
                     currentConfig.displayMode == DisplayMode.IN_PLACE_BLUR &&
                         overlayController.hasActiveInPlaceOverlay()
 
-                if (!isPaused) {
+                if (!isPaused && !overlayController.isHistoryVisible()) {
                     val roi = overlayController.getActiveCaptureRoi()
-                    // Temporarily hide only the In-Place overlay layer during capture so
-                    // MediaProjection reads the underlying game text and prevents self-OCR loops.
-                    if (isInPlaceWithActiveMask) {
+                    val croppedBitmap = if (isInPlaceWithActiveMask) {
+                        // Drain stale buffered image, hide mask for ~1 single frame, grab clean frame, restore immediately
+                        captureManager.drainPendingFrame()
                         overlayController.setInPlaceStealth(true)
-                        delay(55L)
-                    }
-
-                    val croppedBitmap = withContext(Dispatchers.Default) {
-                        captureManager.captureCroppedRoi(roi)
-                    }
-
-                    if (isInPlaceWithActiveMask) {
-                        overlayController.setInPlaceStealth(false)
+                        try {
+                            captureManager.awaitAndCaptureStealthRoi(
+                                roi = roi,
+                                minSettleMs = 18L,
+                                maxWaitMs = 45L
+                            )
+                        } finally {
+                            overlayController.setInPlaceStealth(false)
+                        }
+                    } else {
+                        withContext(Dispatchers.Default) {
+                            captureManager.captureCroppedRoi(roi)
+                        }
                     }
 
                     if (croppedBitmap != null) {
@@ -277,7 +325,7 @@ class ScreenTranslatorService : Service() {
                 }
 
                 val loopDelay = if (isInPlaceWithActiveMask) {
-                    maxOf(currentConfig.scanIntervalMs, 650L)
+                    maxOf(currentConfig.scanIntervalMs, 1000L)
                 } else {
                     currentConfig.scanIntervalMs.coerceIn(150L, 1200L)
                 }
@@ -298,11 +346,8 @@ class ScreenTranslatorService : Service() {
     }
 
     private fun toggleEngineMode() {
-        val next = if (currentConfig.engineMode == TranslationEngineMode.OFFLINE_LOCAL) {
-            TranslationEngineMode.SMART_AI
-        } else {
-            TranslationEngineMode.OFFLINE_LOCAL
-        }
+        val modes = TranslationEngineMode.entries
+        val next = modes[(modes.indexOf(currentConfig.engineMode) + 1) % modes.size]
         serviceScope.launch(Dispatchers.IO) {
             settingsStore.updateEngineMode(next)
         }
@@ -314,7 +359,6 @@ class ScreenTranslatorService : Service() {
         ServiceStateHolder.update { it.copy(status = newStatus) }
         overlayController.updateHud(
             telemetry = ServiceStateHolder.telemetry.value,
-            opacity = currentConfig.overlayOpacity,
             showOriginal = currentConfig.showOriginalText
         )
         startForegroundWithNotification(paused = isPaused)
@@ -326,7 +370,6 @@ class ScreenTranslatorService : Service() {
         ServiceStateHolder.update { it.copy(isRoiLocked = isRoiLocked) }
         overlayController.updateHud(
             telemetry = ServiceStateHolder.telemetry.value,
-            opacity = currentConfig.overlayOpacity,
             showOriginal = currentConfig.showOriginalText
         )
     }
@@ -430,6 +473,7 @@ class ScreenTranslatorService : Service() {
         ocrEngine.close()
         offlineProvider.close()
         smartAiProvider.close()
+        deeplProvider.close()
         ServiceStateHolder.markStopped()
         serviceScope.cancel()
         super.onDestroy()

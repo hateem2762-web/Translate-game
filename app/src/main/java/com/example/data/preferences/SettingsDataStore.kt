@@ -13,7 +13,6 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.model.AiProviderPreset
 import com.example.model.DisplayMode
 import com.example.model.RoiRect
-import com.example.model.SubtitleFontSize
 import com.example.model.TranslationConfig
 import com.example.model.TranslationEngineMode
 import com.google.mlkit.nl.translate.TranslateLanguage
@@ -34,7 +33,21 @@ class SettingsDataStore(private val context: Context) {
 
         val DISPLAY_MODE = stringPreferencesKey("display_mode")
         val ENGINE_MODE = stringPreferencesKey("engine_mode")
-        val FONT_SIZE = stringPreferencesKey("font_size")
+        val LEGACY_FONT_SIZE = stringPreferencesKey("font_size")
+        val FONT_SIZE_SP = floatPreferencesKey("font_size_sp")
+
+        val IN_PLACE_PADDING_X = floatPreferencesKey("in_place_padding_x_dp")
+        val IN_PLACE_PADDING_Y = floatPreferencesKey("in_place_padding_y_dp")
+        val IN_PLACE_CORNER_RADIUS = floatPreferencesKey("in_place_corner_radius_dp")
+        val IN_PLACE_OFFSET_X = floatPreferencesKey("in_place_offset_x_dp")
+        val IN_PLACE_OFFSET_Y = floatPreferencesKey("in_place_offset_y_dp")
+
+        val CLASSIC_BOX_WIDTH_DP = intPreferencesKey("classic_box_width_dp")
+        val CLASSIC_BOX_HEIGHT_DP = intPreferencesKey("classic_box_height_dp")
+        val CLASSIC_BOX_X = intPreferencesKey("classic_box_x")
+        val CLASSIC_BOX_Y = intPreferencesKey("classic_box_y")
+        val CLASSIC_BOX_OPACITY = floatPreferencesKey("classic_box_opacity")
+
         val AI_PRESET = stringPreferencesKey("ai_preset")
         val AI_API_KEY = stringPreferencesKey("ai_api_key")
         val AI_ENDPOINT_URL = stringPreferencesKey("ai_endpoint_url")
@@ -59,9 +72,13 @@ class SettingsDataStore(private val context: Context) {
             TranslationEngineMode.valueOf(prefs[Keys.ENGINE_MODE] ?: TranslationEngineMode.OFFLINE_LOCAL.name)
         }.getOrDefault(TranslationEngineMode.OFFLINE_LOCAL)
 
-        val fontSize = runCatching {
-            SubtitleFontSize.valueOf(prefs[Keys.FONT_SIZE] ?: SubtitleFontSize.NORMAL.name)
-        }.getOrDefault(SubtitleFontSize.NORMAL)
+        val migratedLegacySp = when (prefs[Keys.LEGACY_FONT_SIZE]) {
+            "SMALL" -> 14f
+            "LARGE" -> 21f
+            "EXTRA_LARGE" -> 24f
+            else -> 18f
+        }
+        val fontSizeSp = (prefs[Keys.FONT_SIZE_SP] ?: migratedLegacySp).coerceIn(12f, 32f)
 
         TranslationConfig(
             sourceLangCode = prefs[Keys.SOURCE_LANG] ?: TranslateLanguage.ENGLISH,
@@ -72,7 +89,17 @@ class SettingsDataStore(private val context: Context) {
             showOriginalText = prefs[Keys.SHOW_ORIGINAL] ?: false,
             displayMode = displayMode,
             engineMode = engineMode,
-            fontSize = fontSize,
+            fontSizeSp = fontSizeSp,
+            inPlacePaddingXdp = (prefs[Keys.IN_PLACE_PADDING_X] ?: 10f).coerceIn(-4f, 28f),
+            inPlacePaddingYdp = (prefs[Keys.IN_PLACE_PADDING_Y] ?: 5f).coerceIn(-4f, 22f),
+            inPlaceCornerRadiusDp = (prefs[Keys.IN_PLACE_CORNER_RADIUS] ?: 12f).coerceIn(0f, 28f),
+            inPlaceOffsetXdp = (prefs[Keys.IN_PLACE_OFFSET_X] ?: 0f).coerceIn(-30f, 30f),
+            inPlaceOffsetYdp = (prefs[Keys.IN_PLACE_OFFSET_Y] ?: 0f).coerceIn(-30f, 30f),
+            classicBoxWidthDp = (prefs[Keys.CLASSIC_BOX_WIDTH_DP] ?: 340).coerceIn(200, 440),
+            classicBoxHeightDp = (prefs[Keys.CLASSIC_BOX_HEIGHT_DP] ?: 136).coerceIn(84, 340),
+            classicBoxX = prefs[Keys.CLASSIC_BOX_X] ?: -1,
+            classicBoxY = prefs[Keys.CLASSIC_BOX_Y] ?: -1,
+            classicBoxOpacity = (prefs[Keys.CLASSIC_BOX_OPACITY] ?: 0.86f).coerceIn(0f, 1f),
             aiPreset = preset,
             aiApiKey = prefs[Keys.AI_API_KEY] ?: "",
             aiEndpointUrl = prefs[Keys.AI_ENDPOINT_URL] ?: preset.defaultBaseUrl,
@@ -98,8 +125,69 @@ class SettingsDataStore(private val context: Context) {
         context.dataStore.edit { it[Keys.ENGINE_MODE] = mode.name }
     }
 
-    suspend fun updateFontSize(fontSize: SubtitleFontSize) {
-        context.dataStore.edit { it[Keys.FONT_SIZE] = fontSize.name }
+    suspend fun updateFontSizeSp(fontSizeSp: Float) {
+        context.dataStore.edit { it[Keys.FONT_SIZE_SP] = fontSizeSp.coerceIn(12f, 32f) }
+    }
+
+    suspend fun updateInPlacePaddingX(dp: Float) {
+        context.dataStore.edit { it[Keys.IN_PLACE_PADDING_X] = dp.coerceIn(-4f, 28f) }
+    }
+
+    suspend fun updateInPlacePaddingY(dp: Float) {
+        context.dataStore.edit { it[Keys.IN_PLACE_PADDING_Y] = dp.coerceIn(-4f, 22f) }
+    }
+
+    suspend fun updateInPlaceCornerRadius(dp: Float) {
+        context.dataStore.edit { it[Keys.IN_PLACE_CORNER_RADIUS] = dp.coerceIn(0f, 28f) }
+    }
+
+    suspend fun updateInPlaceOffsetX(dp: Float) {
+        context.dataStore.edit { it[Keys.IN_PLACE_OFFSET_X] = dp.coerceIn(-30f, 30f) }
+    }
+
+    suspend fun updateInPlaceOffsetY(dp: Float) {
+        context.dataStore.edit { it[Keys.IN_PLACE_OFFSET_Y] = dp.coerceIn(-30f, 30f) }
+    }
+
+    suspend fun resetInPlaceTuning() {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.IN_PLACE_PADDING_X] = 10f
+            prefs[Keys.IN_PLACE_PADDING_Y] = 5f
+            prefs[Keys.IN_PLACE_CORNER_RADIUS] = 12f
+            prefs[Keys.IN_PLACE_OFFSET_X] = 0f
+            prefs[Keys.IN_PLACE_OFFSET_Y] = 0f
+        }
+    }
+
+    suspend fun updateClassicBoxWidthDp(widthDp: Int) {
+        context.dataStore.edit { it[Keys.CLASSIC_BOX_WIDTH_DP] = widthDp.coerceIn(200, 440) }
+    }
+
+    suspend fun updateClassicBoxHeightDp(heightDp: Int) {
+        context.dataStore.edit { it[Keys.CLASSIC_BOX_HEIGHT_DP] = heightDp.coerceIn(84, 340) }
+    }
+
+    suspend fun saveClassicBoxLayout(x: Int, y: Int, widthDp: Int, heightDp: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.CLASSIC_BOX_X] = x
+            prefs[Keys.CLASSIC_BOX_Y] = y
+            prefs[Keys.CLASSIC_BOX_WIDTH_DP] = widthDp.coerceIn(200, 440)
+            prefs[Keys.CLASSIC_BOX_HEIGHT_DP] = heightDp.coerceIn(84, 340)
+        }
+    }
+
+    suspend fun updateClassicBoxOpacity(opacity: Float) {
+        context.dataStore.edit { it[Keys.CLASSIC_BOX_OPACITY] = opacity.coerceIn(0f, 1f) }
+    }
+
+    suspend fun resetClassicBoxLayout() {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.CLASSIC_BOX_WIDTH_DP] = 340
+            prefs[Keys.CLASSIC_BOX_HEIGHT_DP] = 136
+            prefs[Keys.CLASSIC_BOX_X] = -1
+            prefs[Keys.CLASSIC_BOX_Y] = -1
+            prefs[Keys.CLASSIC_BOX_OPACITY] = 0.86f
+        }
     }
 
     suspend fun updateAiPreset(preset: AiProviderPreset) {

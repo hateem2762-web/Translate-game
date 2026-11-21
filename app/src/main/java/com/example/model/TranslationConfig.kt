@@ -9,20 +9,8 @@ enum class DisplayMode(val shortLabelTr: String) {
 
 enum class TranslationEngineMode(val shortLabelTr: String) {
     OFFLINE_LOCAL("Yerel"),
-    SMART_AI("AI")
-}
-
-enum class SubtitleFontSize(
-    val displayNameTr: String,
-    val classicSp: Float,
-    val inPlaceTargetSp: Float,
-    val inPlaceMinSp: Float,
-    val inPlaceMaxSp: Float
-) {
-    SMALL("Küçük", classicSp = 14f, inPlaceTargetSp = 15.5f, inPlaceMinSp = 14f, inPlaceMaxSp = 18f),
-    NORMAL("Normal", classicSp = 16f, inPlaceTargetSp = 18f, inPlaceMinSp = 16f, inPlaceMaxSp = 22f),
-    LARGE("Büyük", classicSp = 19f, inPlaceTargetSp = 21f, inPlaceMinSp = 18f, inPlaceMaxSp = 26f),
-    EXTRA_LARGE("Çok Büyük", classicSp = 22f, inPlaceTargetSp = 24f, inPlaceMinSp = 20f, inPlaceMaxSp = 30f)
+    SMART_AI("AI"),
+    DEEPL("DeepL")
 }
 
 enum class AiProviderPreset(
@@ -93,7 +81,19 @@ data class TranslationConfig(
     val showOriginalText: Boolean = false,
     val displayMode: DisplayMode = DisplayMode.CLASSIC_BOX,
     val engineMode: TranslationEngineMode = TranslationEngineMode.OFFLINE_LOCAL,
-    val fontSize: SubtitleFontSize = SubtitleFontSize.NORMAL,
+    val fontSizeSp: Float = 18f,
+    // Fine-tuned In-Place Blur geometry (in dp)
+    val inPlacePaddingXdp: Float = 10f,
+    val inPlacePaddingYdp: Float = 5f,
+    val inPlaceCornerRadiusDp: Float = 12f,
+    val inPlaceOffsetXdp: Float = 0f,
+    val inPlaceOffsetYdp: Float = 0f,
+    // Resizable & persisted Classic Box dimensions and background-only opacity (0f..1f)
+    val classicBoxWidthDp: Int = 340,
+    val classicBoxHeightDp: Int = 136,
+    val classicBoxX: Int = -1,
+    val classicBoxY: Int = -1,
+    val classicBoxOpacity: Float = 0.86f,
     val aiPreset: AiProviderPreset = AiProviderPreset.GEMINI_FLASH,
     val aiApiKey: String = "",
     val aiEndpointUrl: String = AiProviderPreset.GEMINI_FLASH.defaultBaseUrl,

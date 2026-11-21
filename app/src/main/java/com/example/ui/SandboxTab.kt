@@ -27,13 +27,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BlurOn
@@ -58,6 +61,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -69,8 +74,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -81,10 +91,9 @@ import com.example.R
 import com.example.model.DisplayMode
 import com.example.model.InPlaceBlock
 import com.example.model.ModelDownloadState
-import com.example.model.ServiceStatus
-import com.example.model.SubtitleFontSize
 import com.example.model.TranslationEngineMode
 import com.example.overlay.InPlaceCanvasRenderer
+import com.example.overlay.InPlaceRenderStyle
 import com.example.ui.theme.AmberTertiary
 import com.example.ui.theme.CyanContainer
 import com.example.ui.theme.CyanPrimary
@@ -92,6 +101,7 @@ import com.example.ui.theme.EmeraldSuccess
 import com.example.ui.theme.ObsidianOutline
 import com.example.ui.theme.ObsidianSurface
 import com.example.ui.theme.ObsidianSurfaceElevated
+import kotlin.math.roundToInt
 
 @Composable
 fun SandboxTab(
@@ -102,13 +112,41 @@ fun SandboxTab(
     onClearSandbox: () -> Unit,
     onSelectDisplayMode: (DisplayMode) -> Unit,
     onSelectEngineMode: (TranslationEngineMode) -> Unit,
-    onSelectFontSize: (SubtitleFontSize) -> Unit,
+    onFontSizeSpChange: (Float) -> Unit,
+    onInPlacePaddingXChange: (Float) -> Unit,
+    onInPlacePaddingYChange: (Float) -> Unit,
+    onInPlaceCornerRadiusChange: (Float) -> Unit,
+    onInPlaceOffsetXChange: (Float) -> Unit,
+    onInPlaceOffsetYChange: (Float) -> Unit,
+    onResetInPlaceTuning: () -> Unit,
+    onClassicBoxWidthChange: (Int) -> Unit,
+    onClassicBoxHeightChange: (Int) -> Unit,
+    onClassicBoxOpacityChange: (Float) -> Unit,
+    onResetClassicBoxLayout: () -> Unit,
     onDownloadModelClick: () -> Unit,
     onStartCaptureClick: () -> Unit,
     onStopCaptureClick: () -> Unit
 ) {
     var sceneHostRef by remember { mutableStateOf<SandboxSceneContainer?>(null) }
     val allPermissionsReady = uiState.hasOverlayPermission && uiState.hasNotificationPermission
+
+    val renderStyle = remember(
+        uiState.config.fontSizeSp,
+        uiState.config.inPlacePaddingXdp,
+        uiState.config.inPlacePaddingYdp,
+        uiState.config.inPlaceCornerRadiusDp,
+        uiState.config.inPlaceOffsetXdp,
+        uiState.config.inPlaceOffsetYdp
+    ) {
+        InPlaceRenderStyle(
+            fontSizeSp = uiState.config.fontSizeSp,
+            paddingXdp = uiState.config.inPlacePaddingXdp,
+            paddingYdp = uiState.config.inPlacePaddingYdp,
+            cornerRadiusDp = uiState.config.inPlaceCornerRadiusDp,
+            offsetXdp = uiState.config.inPlaceOffsetXdp,
+            offsetYdp = uiState.config.inPlaceOffsetYdp
+        )
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -148,7 +186,7 @@ fun SandboxTab(
                                     style = MaterialTheme.typography.titleMedium
                                 )
                                 Text(
-                                    text = "Oyuna girmeden OCR, Çince desteği ve Doğal Blur kalitesini deneyin",
+                                    text = "Oyuna girmeden OCR, Çince desteği, Doğal Blur ve Kutu boyutunu deneyin",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -192,7 +230,7 @@ fun SandboxTab(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(265.dp)
+                            .height(275.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(Color(0xFF070B14))
                     ) {
@@ -209,27 +247,32 @@ fun SandboxTab(
                                     } else {
                                         emptyList()
                                     },
-                                    fontSize = uiState.config.fontSize
+                                    style = renderStyle
                                 )
                             },
                             modifier = Modifier.fillMaxSize()
                         )
 
-                        // Classic Box preview inside the game viewport when CLASSIC_BOX has translated text
+                        // Classic Box preview: background & border opacity 0%-100%, text always 100% opaque with black stroke+shadow
                         if (uiState.config.displayMode == DisplayMode.CLASSIC_BOX &&
                             uiState.sandboxState.translatedText.isNotBlank()
                         ) {
+                            val boxOpacity = uiState.config.classicBoxOpacity.coerceIn(0f, 1f)
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
-                                    .padding(horizontal = 12.dp, vertical = 14.dp)
-                                    .fillMaxWidth(),
+                                    .padding(horizontal = 10.dp, vertical = 12.dp)
+                                    .widthIn(max = uiState.config.classicBoxWidthDp.dp)
+                                    .fillMaxWidth()
+                                    .heightIn(min = 68.dp, max = uiState.config.classicBoxHeightDp.coerceAtMost(190).dp),
                                 shape = RoundedCornerShape(14.dp),
-                                color = Color(0xFF090E17).copy(alpha = uiState.config.overlayOpacity.coerceIn(0.55f, 0.96f)),
-                                border = BorderStroke(1.dp, CyanPrimary.copy(alpha = 0.45f))
+                                color = Color(0xFF090E17).copy(alpha = boxOpacity),
+                                border = BorderStroke(1.dp, CyanPrimary.copy(alpha = boxOpacity * 0.45f))
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    modifier = Modifier
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                        .verticalScroll(rememberScrollState()),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text(
@@ -237,13 +280,32 @@ fun SandboxTab(
                                         style = MaterialTheme.typography.labelSmall,
                                         color = CyanPrimary
                                     )
-                                    Text(
-                                        text = uiState.sandboxState.translatedText,
-                                        fontSize = uiState.config.fontSize.classicSp.sp,
-                                        lineHeight = (uiState.config.fontSize.classicSp * 1.32f).sp,
-                                        color = Color(0xFFF8FAFC),
-                                        fontWeight = FontWeight.Medium
-                                    )
+                                    Box {
+                                        Text(
+                                            text = uiState.sandboxState.translatedText,
+                                            style = TextStyle(
+                                                fontSize = uiState.config.fontSizeSp.sp,
+                                                lineHeight = (uiState.config.fontSizeSp * 1.32f).sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xF504080F),
+                                                drawStyle = Stroke(width = 6f, join = StrokeJoin.Round),
+                                                shadow = Shadow(
+                                                    color = Color(0xF5000000),
+                                                    offset = Offset(0f, 2f),
+                                                    blurRadius = 6f
+                                                )
+                                            )
+                                        )
+                                        Text(
+                                            text = uiState.sandboxState.translatedText,
+                                            style = TextStyle(
+                                                fontSize = uiState.config.fontSizeSp.sp,
+                                                lineHeight = (uiState.config.fontSizeSp * 1.32f).sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFFF8FAFC)
+                                            )
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -465,7 +527,7 @@ fun SandboxTab(
             }
         }
 
-        // Instant Sandbox Controls for Display Mode, Font Size, and Engine
+        // Instant Sandbox Controls for Display Mode, Precision Font Size, Geometry/Box Size, and Engine
         item {
             Card(
                 shape = MaterialTheme.shapes.large,
@@ -479,7 +541,7 @@ fun SandboxTab(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Canlı Önizleme Ayarları",
+                        text = "Canlı Önizleme İnce Ayarları",
                         style = MaterialTheme.typography.titleMedium
                     )
 
@@ -509,29 +571,120 @@ fun SandboxTab(
 
                     HorizontalDivider(color = ObsidianOutline)
 
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(text = "Altyazı Yazı Boyutu", style = MaterialTheme.typography.labelLarge)
-                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                            SubtitleFontSize.entries.forEachIndexed { index, size ->
-                                SegmentedButton(
-                                    selected = uiState.config.fontSize == size,
-                                    onClick = { onSelectFontSize(size) },
-                                    shape = SegmentedButtonDefaults.itemShape(
-                                        index = index,
-                                        count = SubtitleFontSize.entries.size
-                                    ),
-                                    modifier = Modifier.height(48.dp)
-                                ) {
-                                    Text(
-                                        text = size.displayNameTr,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
+                    SandboxPrecisionSlider(
+                        title = "Altyazı Yazı Boyutu",
+                        valueLabel = "${uiState.config.fontSizeSp.roundToInt()} sp",
+                        value = uiState.config.fontSizeSp,
+                        valueRange = 12f..32f,
+                        steps = 19,
+                        testTag = "sandbox_font_size_slider",
+                        onValueChange = { onFontSizeSpChange(it.roundToInt().toFloat()) }
+                    )
+
+                    HorizontalDivider(color = ObsidianOutline)
+
+                    if (uiState.config.displayMode == DisplayMode.IN_PLACE_BLUR) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Blur Geometri İnce Ayarı",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = CyanPrimary
+                            )
+                            TextButton(onClick = onResetInPlaceTuning) {
+                                Text("Sıfırla")
                             }
                         }
+                        SandboxPrecisionSlider(
+                            title = "Yatay Dolgu (Padding X)",
+                            valueLabel = "${uiState.config.inPlacePaddingXdp.roundToInt()} dp",
+                            value = uiState.config.inPlacePaddingXdp,
+                            valueRange = -4f..28f,
+                            steps = 31,
+                            testTag = "sandbox_padding_x_slider",
+                            onValueChange = { onInPlacePaddingXChange(it.roundToInt().toFloat()) }
+                        )
+                        SandboxPrecisionSlider(
+                            title = "Dikey Dolgu (Padding Y)",
+                            valueLabel = "${uiState.config.inPlacePaddingYdp.roundToInt()} dp",
+                            value = uiState.config.inPlacePaddingYdp,
+                            valueRange = -4f..22f,
+                            steps = 25,
+                            testTag = "sandbox_padding_y_slider",
+                            onValueChange = { onInPlacePaddingYChange(it.roundToInt().toFloat()) }
+                        )
+                        SandboxPrecisionSlider(
+                            title = "Köşe Yuvarlatma",
+                            valueLabel = "${uiState.config.inPlaceCornerRadiusDp.roundToInt()} dp",
+                            value = uiState.config.inPlaceCornerRadiusDp,
+                            valueRange = 0f..28f,
+                            steps = 27,
+                            testTag = "sandbox_corner_radius_slider",
+                            onValueChange = { onInPlaceCornerRadiusChange(it.roundToInt().toFloat()) }
+                        )
+                        SandboxPrecisionSlider(
+                            title = "Yatay Konum (Offset X)",
+                            valueLabel = "${uiState.config.inPlaceOffsetXdp.roundToInt()} dp",
+                            value = uiState.config.inPlaceOffsetXdp,
+                            valueRange = -30f..30f,
+                            steps = 59,
+                            testTag = "sandbox_offset_x_slider",
+                            onValueChange = { onInPlaceOffsetXChange(it.roundToInt().toFloat()) }
+                        )
+                        SandboxPrecisionSlider(
+                            title = "Dikey Konum (Offset Y)",
+                            valueLabel = "${uiState.config.inPlaceOffsetYdp.roundToInt()} dp",
+                            value = uiState.config.inPlaceOffsetYdp,
+                            valueRange = -30f..30f,
+                            steps = 59,
+                            testTag = "sandbox_offset_y_slider",
+                            onValueChange = { onInPlaceOffsetYChange(it.roundToInt().toFloat()) }
+                        )
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Klasik Kutu Boyutu",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = CyanPrimary
+                            )
+                            TextButton(onClick = onResetClassicBoxLayout) {
+                                Text("Sıfırla")
+                            }
+                        }
+                        SandboxPrecisionSlider(
+                            title = "Kutu Genişliği",
+                            valueLabel = "${uiState.config.classicBoxWidthDp} dp",
+                            value = uiState.config.classicBoxWidthDp.toFloat(),
+                            valueRange = 200f..440f,
+                            steps = 23,
+                            testTag = "sandbox_classic_width_slider",
+                            onValueChange = { onClassicBoxWidthChange((it / 10f).roundToInt() * 10) }
+                        )
+                        SandboxPrecisionSlider(
+                            title = "Kutu Yüksekliği",
+                            valueLabel = "${uiState.config.classicBoxHeightDp} dp",
+                            value = uiState.config.classicBoxHeightDp.toFloat(),
+                            valueRange = 84f..340f,
+                            steps = 0,
+                            testTag = "sandbox_classic_height_slider",
+                            onValueChange = { onClassicBoxHeightChange((it / 8f).roundToInt() * 8) }
+                        )
+                        SandboxPrecisionSlider(
+                            title = "Kutu Arka Plan Görünürlüğü (Opaklık)",
+                            valueLabel = "%${(uiState.config.classicBoxOpacity * 100).roundToInt()}",
+                            value = uiState.config.classicBoxOpacity,
+                            valueRange = 0f..1f,
+                            steps = 0,
+                            testTag = "sandbox_classic_opacity_slider",
+                            onValueChange = onClassicBoxOpacityChange
+                        )
                     }
 
                     HorizontalDivider(color = ObsidianOutline)
@@ -549,10 +702,10 @@ fun SandboxTab(
                                     ),
                                     icon = {
                                         Icon(
-                                            imageVector = if (mode == TranslationEngineMode.OFFLINE_LOCAL) {
-                                                Icons.Rounded.OfflineBolt
-                                            } else {
-                                                Icons.Rounded.AutoAwesome
+                                            imageVector = when (mode) {
+                                                TranslationEngineMode.OFFLINE_LOCAL -> Icons.Rounded.OfflineBolt
+                                                TranslationEngineMode.SMART_AI -> Icons.Rounded.AutoAwesome
+                                                TranslationEngineMode.DEEPL -> Icons.Rounded.Translate
                                             },
                                             contentDescription = null,
                                             modifier = Modifier.size(16.dp)
@@ -561,7 +714,7 @@ fun SandboxTab(
                                     modifier = Modifier.height(48.dp)
                                 ) {
                                     Text(
-                                        text = if (mode == TranslationEngineMode.OFFLINE_LOCAL) "Hızlı Yerel" else "Akıllı AI",
+                                        text = mode.shortLabelTr,
                                         maxLines = 1,
                                         softWrap = false,
                                         overflow = TextOverflow.Ellipsis
@@ -575,6 +728,39 @@ fun SandboxTab(
         }
 
         item { Spacer(modifier = Modifier.height(12.dp)) }
+    }
+}
+
+@Composable
+private fun SandboxPrecisionSlider(
+    title: String,
+    valueLabel: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    testTag: String,
+    onValueChange: (Float) -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = title, style = MaterialTheme.typography.labelLarge)
+            Text(text = valueLabel, style = MaterialTheme.typography.labelMedium, color = CyanPrimary)
+        }
+        Slider(
+            value = value.coerceIn(valueRange.start, valueRange.endInclusive),
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            steps = steps,
+            modifier = Modifier.testTag(testTag),
+            colors = SliderDefaults.colors(
+                thumbColor = CyanPrimary,
+                activeTrackColor = CyanPrimary
+            )
+        )
     }
 }
 
@@ -596,10 +782,10 @@ private class SandboxSceneContainer(context: Context) : FrameLayout(context) {
     fun updateScene(
         dialogueText: String,
         inPlaceBlocks: List<InPlaceBlock>,
-        fontSize: SubtitleFontSize
+        style: InPlaceRenderStyle
     ) {
         backdropView.setDialogue(dialogueText)
-        inPlaceOverlay.setBlocks(inPlaceBlocks, fontSize)
+        inPlaceOverlay.setBlocks(inPlaceBlocks, style)
     }
 
     fun captureCleanSceneBitmap(): Bitmap? {
@@ -678,7 +864,6 @@ private class SandboxSceneContainer(context: Context) : FrameLayout(context) {
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
 
-            // Night dungeon gradient background
             skyPaint.shader = LinearGradient(
                 0f, 0f, 0f, h,
                 intArrayOf(
@@ -691,7 +876,6 @@ private class SandboxSceneContainer(context: Context) : FrameLayout(context) {
             )
             canvas.drawRect(0f, 0f, w, h, skyPaint)
 
-            // Arcane portal glow in center
             glowPaint.shader = RadialGradient(
                 w * 0.5f, h * 0.42f, w * 0.42f,
                 intArrayOf(
@@ -704,7 +888,6 @@ private class SandboxSceneContainer(context: Context) : FrameLayout(context) {
             )
             canvas.drawCircle(w * 0.5f, h * 0.42f, w * 0.42f, glowPaint)
 
-            // Ancient ruins stone pillars
             canvas.drawRect(w * 0.08f, h * 0.14f, w * 0.20f, h * 0.88f, pillarPaint)
             canvas.drawRect(w * 0.80f, h * 0.14f, w * 0.92f, h * 0.88f, pillarPaint)
             archPath.reset()
@@ -714,7 +897,6 @@ private class SandboxSceneContainer(context: Context) : FrameLayout(context) {
             archPath.lineTo(w * 0.76f, h * 0.72f)
             canvas.drawPath(archPath, runePaint)
 
-            // Top-left mini game HP/MP HUD (kept clear of subtitle area)
             rectTmp.set(12f * density, 12f * density, 148f * density, 50f * density)
             canvas.drawRoundRect(rectTmp, 10f * density, 10f * density, hudBarBg)
             canvas.drawText("LV.42 ELDEN KNIGHT", 20f * density, 25f * density, hudLabelPaint)
@@ -723,7 +905,6 @@ private class SandboxSceneContainer(context: Context) : FrameLayout(context) {
             rectTmp.set(20f * density, 39f * density, 108f * density, 44f * density)
             canvas.drawRoundRect(rectTmp, 3f * density, 3f * density, mpPaint)
 
-            // Bottom dialogue scrim
             bottomScrimPaint.shader = LinearGradient(
                 0f, h * 0.48f, 0f, h,
                 intArrayOf(
@@ -736,7 +917,6 @@ private class SandboxSceneContainer(context: Context) : FrameLayout(context) {
             )
             canvas.drawRect(0f, h * 0.48f, w, h, bottomScrimPaint)
 
-            // Crisp simulated game subtitle text at bottom
             val textPadX = 22f * density
             val availW = (w - textPadX * 2f).toInt().coerceAtLeast(80)
             val fillLayout = StaticLayout.Builder
@@ -764,11 +944,11 @@ private class SandboxSceneContainer(context: Context) : FrameLayout(context) {
     private class InPlaceSandboxOverlay(context: Context) : View(context) {
         private val renderer = InPlaceCanvasRenderer(context)
         private var blocks: List<InPlaceBlock> = emptyList()
-        private var fontSize: SubtitleFontSize = SubtitleFontSize.NORMAL
+        private var style: InPlaceRenderStyle = InPlaceRenderStyle()
 
-        fun setBlocks(newBlocks: List<InPlaceBlock>, newFontSize: SubtitleFontSize) {
+        fun setBlocks(newBlocks: List<InPlaceBlock>, newStyle: InPlaceRenderStyle) {
             blocks = newBlocks
-            fontSize = newFontSize
+            style = newStyle
             invalidate()
         }
 
@@ -778,7 +958,7 @@ private class SandboxSceneContainer(context: Context) : FrameLayout(context) {
             renderer.drawBlocks(
                 canvas = canvas,
                 blocks = blocks,
-                fontSize = fontSize,
+                style = style,
                 canvasWidth = width,
                 canvasHeight = height
             )

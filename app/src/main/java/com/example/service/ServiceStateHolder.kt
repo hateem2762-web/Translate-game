@@ -10,8 +10,12 @@ import kotlinx.coroutines.flow.update
 
 /**
  * Process-local reactive bridge between ScreenTranslatorService and MainActivity UI.
+ * Holds chronological session dialogue history (up to 30 entries) with consecutive deduplication.
  */
 object ServiceStateHolder {
+    private const val MAX_HISTORY_ENTRIES = 30
+    private val WHITESPACE_REGEX = Regex("\\s+")
+
     private val _telemetry = MutableStateFlow(TranslatorTelemetry())
     val telemetry: StateFlow<TranslatorTelemetry> = _telemetry.asStateFlow()
 
@@ -20,16 +24,27 @@ object ServiceStateHolder {
     }
 
     fun pushCompletedEntry(entry: SubtitleEntry) {
+        val cleanSource = normalizeKey(entry.sourceText)
+        val cleanTranslated = normalizeKey(entry.translatedText)
+        if (cleanTranslated.isBlank()) return
+
         _telemetry.update { current ->
-            val deduped = if (current.recentEntries.firstOrNull()?.sourceText == entry.sourceText &&
-                current.recentEntries.firstOrNull()?.translatedText == entry.translatedText
-            ) {
-                current.recentEntries
+            val last = current.recentEntries.lastOrNull()
+            val isDuplicate = last != null && (
+                normalizeKey(last.sourceText) == cleanSource ||
+                    normalizeKey(last.translatedText) == cleanTranslated
+                )
+            if (isDuplicate) {
+                current
             } else {
-                (listOf(entry) + current.recentEntries).take(15)
+                val updated = (current.recentEntries + entry).takeLast(MAX_HISTORY_ENTRIES)
+                current.copy(recentEntries = updated)
             }
-            current.copy(recentEntries = deduped)
         }
+    }
+
+    fun clearHistory() {
+        _telemetry.update { it.copy(recentEntries = emptyList()) }
     }
 
     fun markStopped() {
@@ -41,5 +56,9 @@ object ServiceStateHolder {
                 errorMessage = null
             )
         }
+    }
+
+    private fun normalizeKey(text: String): String {
+        return text.trim().replace(WHITESPACE_REGEX, " ").lowercase()
     }
 }

@@ -1,6 +1,8 @@
 package com.example.engine
 
+import android.content.Context
 import android.util.Log
+import com.example.ai.ensureFirebaseInitialized
 import com.example.model.AiProviderPreset
 import com.example.model.SupportedLanguage
 import com.example.model.TranslationConfig
@@ -56,7 +58,10 @@ class OfflineMlKitTranslationProvider(
     }
 }
 
-class SmartAiTranslationProvider : TranslationProvider {
+class SmartAiTranslationProvider(
+    context: Context
+) : TranslationProvider {
+    private val appContext = context.applicationContext ?: context
     override val mode: TranslationEngineMode = TranslationEngineMode.SMART_AI
 
     private val geminiFlashModel by lazy {
@@ -196,6 +201,12 @@ class SmartAiTranslationProvider : TranslationProvider {
         text: String,
         preferLite: Boolean
     ): String {
+        if (!ensureFirebaseInitialized(appContext)) {
+            throw IOException(
+                "Firebase başlatılamadı (google-services.json eksik veya geçersiz). " +
+                    "Lütfen projeyi google-services.json ile derleyin veya Özel API / Hızlı Yerel kullanın."
+            )
+        }
         val prompt = "$systemPrompt\n\nGame text:\n$text"
         val primaryModel = if (preferLite) geminiLiteModel else geminiFlashModel
 

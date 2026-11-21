@@ -2,7 +2,9 @@ package com.example.overlay
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.util.TypedValue
@@ -14,6 +16,7 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.content.res.ResourcesCompat
 import com.example.R
@@ -25,18 +28,24 @@ import kotlin.math.abs
 
 /**
  * Dual-mode floating HUD:
- * - In CLASSIC_BOX mode: renders the sleek dark translucent subtitle box + top control bar.
- * - In IN_PLACE_BLUR mode: completely hides the separate subtitle panel and collapses into a
- *   draggable circular floating corner button that expands a compact quick-control menu on tap.
+ * - In CLASSIC_BOX mode: renders a draggable & corner-resizable dark translucent subtitle box with
+ *   independent background-only opacity (0%-100%), always-100%-opaque outlined/shadowed text,
+ *   scrollable text area, and a quick Dialogue History button.
+ * - In IN_PLACE_BLUR mode: hides the separate subtitle panel and collapses into a draggable
+ *   circular floating corner button that expands a compact quick-control menu (including History).
  */
 @SuppressLint("ViewConstructor")
 class SubtitleHudOverlayView(
     context: Context,
     private val onDragDelta: (dx: Int, dy: Int) -> Unit,
+    private val onDragFinished: () -> Unit = {},
+    private val onClassicResizeDelta: (dw: Int, dh: Int) -> Unit = { _, _ -> },
+    private val onClassicResizeFinished: () -> Unit = {},
     private val onToggleDisplayMode: () -> Unit,
     private val onToggleEngineMode: () -> Unit,
     private val onTogglePause: () -> Unit,
     private val onToggleLockRoi: () -> Unit,
+    private val onOpenHistory: () -> Unit = {},
     private val onOpenSettings: () -> Unit,
     private val onStopService: () -> Unit,
     private val onMenuExpansionChanged: (expanded: Boolean) -> Unit = {}
@@ -46,17 +55,21 @@ class SubtitleHudOverlayView(
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
 
     // Classic box container & children
+    private val classicWrapper: FrameLayout
     private val classicContainer: LinearLayout
     private val classicBgDrawable: GradientDrawable
     private val statusDot: View
     private val statusLabel: TextView
     private val classicModeChip: TextView
     private val classicEngineChip: TextView
+    private val classicHistoryButton: ImageButton
     private val classicPauseButton: ImageButton
     private val classicLockButton: ImageButton
     private val classicStopButton: ImageButton
-    private val translatedTextView: TextView
-    private val originalTextView: TextView
+    private val textScrollView: ScrollView
+    private val translatedTextView: OutlinedSubtitleTextView
+    private val originalTextView: OutlinedSubtitleTextView
+    private val classicResizeGrip: ClassicResizeGripView
 
     // In-Place circular floating corner button & expandable quick menu
     private val cornerRoot: LinearLayout
@@ -64,6 +77,7 @@ class SubtitleHudOverlayView(
     private val cornerMenuBg: GradientDrawable
     private val cornerModeChip: TextView
     private val cornerEngineChip: TextView
+    private val cornerHistoryButton: ImageButton
     private val cornerPauseButton: ImageButton
     private val cornerLockButton: ImageButton
     private val cornerSettingsButton: ImageButton
@@ -82,16 +96,18 @@ class SubtitleHudOverlayView(
         val jakartaFont = ResourcesCompat.getFont(context, R.font.plus_jakarta_sans)
         val monoFont = ResourcesCompat.getFont(context, R.font.jetbrains_mono)
 
-        // 1. Classic Box Layout
+        // 1. Classic Box Layout (resizable wrapper + scrollable outlined text + corner grip)
+        classicWrapper = FrameLayout(context)
+
         classicBgDrawable = GradientDrawable().apply {
             setColor(Color.argb(220, 9, 14, 23))
             cornerRadius = dp(16f).toFloat()
-            setStroke(dp(1f), Color.parseColor("#4D22D3EE"))
+            setStroke(dp(1f), Color.argb(107, 34, 211, 238))
         }
 
         classicContainer = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12f), dp(8f), dp(8f), dp(10f))
+            setPadding(dp(12f), dp(8f), dp(8f), dp(12f))
             background = classicBgDrawable
         }
 
@@ -117,6 +133,7 @@ class SubtitleHudOverlayView(
             typeface = monoFont
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
+            setShadowLayer(3f, 0f, 1f, Color.BLACK)
         }
         headerRow.addView(statusLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
@@ -130,6 +147,9 @@ class SubtitleHudOverlayView(
             marginEnd = dp(2f)
         })
 
+        classicHistoryButton = createHudButton(R.drawable.ic_hud_history, "Diyalog geçmişini aç") {
+            onOpenHistory()
+        }
         classicPauseButton = createHudButton(R.drawable.ic_hud_pause, "Duraklat veya devam et") {
             onTogglePause()
         }
@@ -140,6 +160,7 @@ class SubtitleHudOverlayView(
             onStopService()
         }
 
+        headerRow.addView(classicHistoryButton)
         headerRow.addView(classicPauseButton)
         headerRow.addView(classicLockButton)
         headerRow.addView(classicStopButton)
@@ -149,42 +170,75 @@ class SubtitleHudOverlayView(
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         )
 
-        translatedTextView = TextView(context).apply {
+        textScrollView = ScrollView(context).apply {
+            isVerticalScrollBarEnabled = true
+            isScrollbarFadingEnabled = true
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            setPadding(0, dp(4f), dp(10f), dp(2f))
+        }
+
+        val textStack = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        translatedTextView = OutlinedSubtitleTextView(context, outlineWidthDp = 3.2f).apply {
             text = context.getString(R.string.overlay_waiting_subtitle)
             setTextColor(Color.parseColor("#F8FAFC"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             typeface = jakartaFont
+            isFakeBoldTextCompat = true
             setLineSpacing(dp(3f).toFloat(), 1.0f)
-            setShadowLayer(4f, 0f, 1.5f, Color.BLACK)
-            maxLines = 5
-            ellipsize = TextUtils.TruncateAt.END
+            alpha = 1f
         }
-        classicContainer.addView(
+        textStack.addView(
             translatedTextView,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(4f)
-            }
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         )
 
-        originalTextView = TextView(context).apply {
+        originalTextView = OutlinedSubtitleTextView(context, outlineWidthDp = 2.4f).apply {
             visibility = View.GONE
-            setTextColor(Color.parseColor("#94A3B8"))
+            setTextColor(Color.parseColor("#CBD5E1"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = jakartaFont
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.END
+            alpha = 1f
         }
-        classicContainer.addView(
+        textStack.addView(
             originalTextView,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = dp(4f)
             }
         )
 
-        setupDragListener(headerRow)
-        setupDragListener(translatedTextView)
+        textScrollView.addView(
+            textStack,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        )
 
-        addView(classicContainer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        classicContainer.addView(
+            textScrollView,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+        )
+
+        classicWrapper.addView(
+            classicContainer,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        )
+
+        classicResizeGrip = ClassicResizeGripView(context).apply {
+            contentDescription = "Altyazı kutusunu boyutlandır"
+        }
+        classicWrapper.addView(
+            classicResizeGrip,
+            LayoutParams(dp(40f), dp(40f)).apply {
+                gravity = Gravity.BOTTOM or Gravity.END
+            }
+        )
+
+        setupDragListener(headerRow)
+        setupTextAreaDragOrScroll(textScrollView)
+        setupClassicResizeListener(classicResizeGrip)
+
+        addView(classicWrapper, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
 
         // 2. In-Place Floating Circular Corner Button + Expandable Menu
         cornerRoot = LinearLayout(context).apply {
@@ -214,6 +268,10 @@ class SubtitleHudOverlayView(
 
         cornerModeChip = createToggleChip(monoFont) { onToggleDisplayMode() }
         cornerEngineChip = createToggleChip(monoFont) { onToggleEngineMode() }
+        cornerHistoryButton = createHudButton(R.drawable.ic_hud_history, "Diyalog geçmişini aç") {
+            collapseCornerMenu()
+            onOpenHistory()
+        }
         cornerPauseButton = createHudButton(R.drawable.ic_hud_pause, "Duraklat veya devam et") {
             onTogglePause()
         }
@@ -221,9 +279,7 @@ class SubtitleHudOverlayView(
             onToggleLockRoi()
         }
         cornerSettingsButton = createHudButton(R.drawable.ic_hud_settings, "Ayarları aç") {
-            isCornerMenuExpanded = false
-            cornerMenuPill.visibility = View.GONE
-            onMenuExpansionChanged(false)
+            collapseCornerMenu()
             onOpenSettings()
         }
         cornerStopButton = createHudButton(R.drawable.ic_hud_close, "Çeviriyi durdur") {
@@ -236,6 +292,7 @@ class SubtitleHudOverlayView(
         cornerMenuPill.addView(cornerEngineChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30f)).apply {
             marginEnd = dp(2f)
         })
+        cornerMenuPill.addView(cornerHistoryButton)
         cornerMenuPill.addView(cornerPauseButton)
         cornerMenuPill.addView(cornerLockButton)
         cornerMenuPill.addView(cornerSettingsButton)
@@ -316,12 +373,27 @@ class SubtitleHudOverlayView(
         addView(cornerRoot, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
     }
 
-    fun updateOpacity(opacity: Float) {
-        val alpha = (opacity.coerceIn(0.45f, 0.96f) * 255).toInt()
-        classicBgDrawable.setColor(Color.argb(alpha, 9, 14, 23))
+    /**
+     * Adjusts ONLY the Classic Box background & border alpha (0% to 100%).
+     * Translated text and its protective outline/shadow always remain at 100% full visibility.
+     */
+    fun updateClassicBoxOpacity(opacity: Float) {
+        val clamped = opacity.coerceIn(0f, 1f)
+        val bgAlpha = (clamped * 255f).toInt().coerceIn(0, 255)
+        val borderAlpha = (clamped * 0.42f * 255f).toInt().coerceIn(0, 255)
+        classicBgDrawable.setColor(Color.argb(bgAlpha, 9, 14, 23))
+        classicBgDrawable.setStroke(dp(1f), Color.argb(borderAlpha, 34, 211, 238))
+        translatedTextView.alpha = 1f
+        originalTextView.alpha = 1f
     }
 
     fun isCornerMenuOpen(): Boolean = isCornerMenuExpanded
+
+    private fun collapseCornerMenu() {
+        isCornerMenuExpanded = false
+        cornerMenuPill.visibility = View.GONE
+        onMenuExpansionChanged(false)
+    }
 
     fun render(telemetry: TranslatorTelemetry, showOriginal: Boolean) {
         val dotColor = when {
@@ -340,18 +412,23 @@ class SubtitleHudOverlayView(
         )
 
         val isBlur = telemetry.displayMode == DisplayMode.IN_PLACE_BLUR
-        val isAi = telemetry.engineMode == TranslationEngineMode.SMART_AI
+        val engineAccentHex = when (telemetry.engineMode) {
+            TranslationEngineMode.SMART_AI -> "#F59E0B"
+            TranslationEngineMode.DEEPL -> "#38BDF8"
+            TranslationEngineMode.OFFLINE_LOCAL -> "#22D3EE"
+        }
+        val engineHighlighted = telemetry.engineMode != TranslationEngineMode.OFFLINE_LOCAL
 
         if (isBlur != (currentDisplayMode == DisplayMode.IN_PLACE_BLUR)) {
             currentDisplayMode = telemetry.displayMode
             if (isBlur) {
-                classicContainer.visibility = View.GONE
+                classicWrapper.visibility = View.GONE
                 cornerRoot.visibility = View.VISIBLE
                 isCornerMenuExpanded = false
                 cornerMenuPill.visibility = View.GONE
             } else {
                 cornerRoot.visibility = View.GONE
-                classicContainer.visibility = View.VISIBLE
+                classicWrapper.visibility = View.VISIBLE
                 isCornerMenuExpanded = false
                 cornerMenuPill.visibility = View.GONE
             }
@@ -365,8 +442,8 @@ class SubtitleHudOverlayView(
 
         classicEngineChip.text = telemetry.engineMode.shortLabelTr
         cornerEngineChip.text = telemetry.engineMode.shortLabelTr
-        styleChip(classicEngineChip, highlighted = isAi, highlightColor = "#F59E0B")
-        styleChip(cornerEngineChip, highlighted = isAi, highlightColor = "#F59E0B")
+        styleChip(classicEngineChip, highlighted = engineHighlighted, highlightColor = engineAccentHex)
+        styleChip(cornerEngineChip, highlighted = engineHighlighted, highlightColor = engineAccentHex)
 
         val pauseRes = if (telemetry.status == ServiceStatus.PAUSED) R.drawable.ic_hud_play else R.drawable.ic_hud_pause
         val lockRes = if (telemetry.isRoiLocked) R.drawable.ic_hud_lock else R.drawable.ic_hud_unlock
@@ -376,13 +453,10 @@ class SubtitleHudOverlayView(
         cornerLockButton.setImageResource(lockRes)
 
         if (isBlur) {
-            // In-Place Blur mode: NO separate subtitle panel at all.
-            // Only the corner FAB (+ optional quick menu / error tooltip if tapped).
-            val fabTint = if (isAi) "#F59E0B" else "#22D3EE"
-            cornerFabIcon.setColorFilter(Color.parseColor(fabTint))
+            cornerFabIcon.setColorFilter(Color.parseColor(engineAccentHex))
             cornerFabBg.setStroke(
                 dp(1.5f),
-                if (telemetry.errorMessage != null) Color.parseColor("#FB7185") else Color.parseColor(fabTint)
+                if (telemetry.errorMessage != null) Color.parseColor("#FB7185") else Color.parseColor(engineAccentHex)
             )
             if (isCornerMenuExpanded && telemetry.errorMessage != null) {
                 cornerErrorBanner.visibility = View.VISIBLE
@@ -391,6 +465,8 @@ class SubtitleHudOverlayView(
                 cornerErrorBanner.visibility = View.GONE
             }
         } else {
+            updateClassicBoxOpacity(telemetry.classicBoxOpacity)
+
             statusLabel.text = when {
                 telemetry.status == ServiceStatus.PAUSED -> "DURAKLAT"
                 telemetry.errorMessage != null -> "HATA"
@@ -402,19 +478,24 @@ class SubtitleHudOverlayView(
                 else -> "HAZIR"
             }
 
+            val clampedSp = telemetry.fontSizeSp.coerceIn(12f, 32f)
             translatedTextView.visibility = View.VISIBLE
-            translatedTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, telemetry.fontSize.classicSp)
-            translatedTextView.text = when {
+            translatedTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, clampedSp)
+            val nextText = when {
                 telemetry.errorMessage != null -> telemetry.errorMessage
                 telemetry.currentTranslatedText.isNotBlank() -> telemetry.currentTranslatedText
                 else -> context.getString(R.string.overlay_waiting_subtitle)
+            }
+            if (translatedTextView.text.toString() != nextText) {
+                translatedTextView.text = nextText
+                textScrollView.scrollTo(0, 0)
             }
 
             if (showOriginal && telemetry.currentSourceText.isNotBlank()) {
                 originalTextView.visibility = View.VISIBLE
                 originalTextView.setTextSize(
                     TypedValue.COMPLEX_UNIT_SP,
-                    (telemetry.fontSize.classicSp - 3.5f).coerceAtLeast(11f)
+                    (clampedSp - 3.5f).coerceAtLeast(11f)
                 )
                 originalTextView.text = telemetry.currentSourceText
             } else {
@@ -439,22 +520,22 @@ class SubtitleHudOverlayView(
         chip.background = GradientDrawable().apply {
             cornerRadius = dp(8f).toFloat()
             setColor(
-                if (highlighted) Color.argb(45, Color.red(accent), Color.green(accent), Color.blue(accent))
-                else Color.argb(60, 31, 45, 69)
+                if (highlighted) Color.argb(65, Color.red(accent), Color.green(accent), Color.blue(accent))
+                else Color.argb(120, 15, 23, 42)
             )
-            setStroke(dp(1f), if (highlighted) accent else Color.parseColor("#475569"))
+            setStroke(dp(1f), if (highlighted) accent else Color.parseColor("#64748B"))
         }
     }
 
     private fun createHudButton(iconRes: Int, contentDesc: String, onClick: () -> Unit): ImageButton {
-        val size = dp(34f)
+        val size = dp(32f)
         return ImageButton(context).apply {
             setImageResource(iconRes)
             contentDescription = contentDesc
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            setColorFilter(Color.parseColor("#CBD5E1"))
+            setColorFilter(Color.parseColor("#E2E8F0"))
             setBackgroundColor(Color.TRANSPARENT)
-            setPadding(dp(6f), dp(6f), dp(6f), dp(6f))
+            setPadding(dp(5f), dp(5f), dp(5f), dp(5f))
             layoutParams = LinearLayout.LayoutParams(size, size)
             setOnClickListener { onClick() }
         }
@@ -512,6 +593,76 @@ class SubtitleHudOverlayView(
     private fun setupDragListener(target: View) {
         var lastRawX = 0f
         var lastRawY = 0f
+        var moved = false
+        target.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    lastRawX = event.rawX
+                    lastRawY = event.rawY
+                    moved = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - lastRawX).toInt()
+                    val dy = (event.rawY - lastRawY).toInt()
+                    if (dx != 0 || dy != 0) {
+                        moved = true
+                        lastRawX = event.rawX
+                        lastRawY = event.rawY
+                        onDragDelta(dx, dy)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (moved) onDragFinished()
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupTextAreaDragOrScroll(scroll: ScrollView) {
+        var lastRawX = 0f
+        var lastRawY = 0f
+        var moved = false
+        scroll.setOnTouchListener { _, event ->
+            val canScroll = scroll.canScrollVertically(1) || scroll.canScrollVertically(-1)
+            if (canScroll) {
+                return@setOnTouchListener false
+            }
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    lastRawX = event.rawX
+                    lastRawY = event.rawY
+                    moved = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - lastRawX).toInt()
+                    val dy = (event.rawY - lastRawY).toInt()
+                    if (dx != 0 || dy != 0) {
+                        moved = true
+                        lastRawX = event.rawX
+                        lastRawY = event.rawY
+                        onDragDelta(dx, dy)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (moved) onDragFinished()
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupClassicResizeListener(target: View) {
+        var lastRawX = 0f
+        var lastRawY = 0f
         target.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -520,13 +671,17 @@ class SubtitleHudOverlayView(
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = (event.rawX - lastRawX).toInt()
-                    val dy = (event.rawY - lastRawY).toInt()
-                    if (dx != 0 || dy != 0) {
+                    val dw = (event.rawX - lastRawX).toInt()
+                    val dh = (event.rawY - lastRawY).toInt()
+                    if (dw != 0 || dh != 0) {
                         lastRawX = event.rawX
                         lastRawY = event.rawY
-                        onDragDelta(dx, dy)
+                        onClassicResizeDelta(dw, dh)
                     }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    onClassicResizeFinished()
                     true
                 }
                 else -> false
@@ -535,4 +690,86 @@ class SubtitleHudOverlayView(
     }
 
     private fun dp(value: Float): Int = (value * density).toInt()
+
+    private class ClassicResizeGripView(context: Context) : View(context) {
+        private val density = resources.displayMetrics.density
+        private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#B322D3EE")
+            strokeWidth = 2f * density
+            strokeCap = Paint.Cap.ROUND
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val right = width - 8f * density
+            val bottom = height - 8f * density
+            canvas.drawLine(right - 10f * density, bottom, right, bottom - 10f * density, linePaint)
+            canvas.drawLine(right - 5f * density, bottom, right, bottom - 5f * density, linePaint)
+        }
+    }
+
+    /**
+     * TextView that always renders a crisp thin dark outline + drop shadow under 100%-opaque text,
+     * keeping subtitles legible even when Classic Box background opacity is reduced to 0%.
+     */
+    private class OutlinedSubtitleTextView(
+        context: Context,
+        outlineWidthDp: Float = 3.2f
+    ) : TextView(context) {
+        private val density = resources.displayMetrics.density
+        private val outlineWidthPx = outlineWidthDp * density
+        private val shadowRadiusPx = 4.5f * density
+        private val shadowDyPx = 1.5f * density
+        private val outlineColor = Color.argb(245, 4, 8, 15)
+        private val shadowColor = Color.argb(245, 0, 0, 0)
+
+        var isFakeBoldTextCompat: Boolean = false
+            set(value) {
+                field = value
+                paint.isFakeBoldText = value
+                invalidate()
+            }
+
+        override fun onDraw(canvas: Canvas) {
+            val textLayout = layout
+            if (textLayout == null) {
+                super.onDraw(canvas)
+                return
+            }
+
+            val p = paint
+            val savedStyle = p.style
+            val savedColor = p.color
+            val savedStrokeWidth = p.strokeWidth
+            val savedJoin = p.strokeJoin
+            val savedCap = p.strokeCap
+            val savedFakeBold = p.isFakeBoldText
+
+            canvas.save()
+            canvas.translate(compoundPaddingLeft.toFloat(), extendedPaddingTop.toFloat())
+
+            p.isFakeBoldText = isFakeBoldTextCompat
+            p.style = Paint.Style.STROKE
+            p.strokeJoin = Paint.Join.ROUND
+            p.strokeCap = Paint.Cap.ROUND
+            p.strokeWidth = outlineWidthPx
+            p.color = outlineColor
+            p.setShadowLayer(shadowRadiusPx, 0f, shadowDyPx, shadowColor)
+            textLayout.draw(canvas)
+
+            p.style = Paint.Style.FILL
+            p.clearShadowLayer()
+            p.color = currentTextColor
+            textLayout.draw(canvas)
+
+            canvas.restore()
+
+            p.style = savedStyle
+            p.color = savedColor
+            p.strokeWidth = savedStrokeWidth
+            p.strokeJoin = savedJoin
+            p.strokeCap = savedCap
+            p.isFakeBoldText = savedFakeBold
+        }
+    }
 }
