@@ -1,0 +1,43 @@
+<resources>
+    <string name="app_name">SubLens</string>
+    <string name="app_tagline">Cihaz İçi &amp; AI Oyun Altyazı Çevirmeni</string>
+
+    <string name="status_idle">Hazır</string>
+    <string name="status_running">Canlı Çeviri Aktif</string>
+    <string name="status_paused">Tarama Duraklatıldı</string>
+    <string name="status_downloading_model">Dil Paketi İndiriliyor…</string>
+
+    <string name="permission_overlay_title">Üstte Gösterme İzni</string>
+    <string name="permission_overlay_desc">Altyazı çerçevesini oyunların üzerinde göstermek için gereklidir.</string>
+    <string name="permission_notification_title">Bildirim İzni</string>
+    <string name="permission_notification_desc">Arka plan yakalama servisini canlı tutmak ve hızlıca durdurmak için gereklidir.</string>
+    <string name="permission_granted">Verildi</string>
+    <string name="permission_grant_action">İzin Ver</string>
+
+    <string name="action_start_capture">Altyazı Çevirisini Başlat</string>
+    <string name="action_stop_capture">Çeviriyi Durdur</string>
+    <string name="action_pause_capture">Duraklat</string>
+    <string name="action_resume_capture">Devam Et</string>
+    <string name="action_download_model">Dil Paketini İndir (~30 MB)</string>
+    <string name="action_reset_roi">Bölgeyi Sıfırla</string>
+    <string name="action_clear_cache">Önbelleği Temizle</string>
+
+    <string name="notification_channel_name">Canlı Altyazı Çevirisi</string>
+    <string name="notification_channel_desc">Seçili ekran bölgesinden oyun altyazısı OCR ve çeviri servisi</string>
+    <string name="notification_title">SubLens Çeviri Aktif</string>
+    <string name="notification_text_running">Altyazı bölgesi taranıyor. Durdurmak için dokunun.</string>
+    <string name="notification_text_paused">Tarama duraklatıldı. Devam etmek için üst kutuyu kullanın.</string>
+
+    <string name="overlay_roi_handle">Altyazı Bölgesi • Sürükle</string>
+    <string name="overlay_waiting_subtitle">Altyazı bekleniyor…</string>
+    <string name="overlay_model_missing">Dil paketi indirilmedi. Ana ekrandan indirin.</string>
+
+    <string name="display_mode_classic">Klasik Kutu</string>
+    <string name="display_mode_in_place">Doğal Blur</string>
+    <string name="engine_mode_offline">Hızlı Yerel</string>
+    <string name="engine_mode_ai">Akıllı AI</string>
+    <string name="tab_controls">Kontrol</string>
+    <string name="tab_sandbox">Canlı Test</string>
+    <string name="sandbox_en_sample">The ancient seal is breaking! Find the key before the shadow consumes the village.</string>
+    <string name="sandbox_zh_sample">古老的封印正在碎裂！在黑暗吞噬村庄之前，快找到钥匙。</string>
+</resources>
