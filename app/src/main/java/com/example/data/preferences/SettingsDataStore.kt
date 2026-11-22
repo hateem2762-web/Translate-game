@@ -13,6 +13,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.model.AiProviderPreset
 import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
+import com.example.model.FloatingBubbleBehavior
+import com.example.model.FloatingBubbleTheme
 import com.example.model.RoiRect
 import com.example.model.SubtitleColorPreset
 import com.example.model.TranslationConfig
@@ -51,6 +53,9 @@ class SettingsDataStore(private val context: Context) {
         val CLASSIC_BOX_Y = intPreferencesKey("classic_box_y")
         val CLASSIC_BOX_OPACITY = floatPreferencesKey("classic_box_opacity")
         val CLASSIC_TEXT_FIT_MODE = stringPreferencesKey("classic_text_fit_mode")
+
+        val BUBBLE_BEHAVIOR = stringPreferencesKey("bubble_behavior")
+        val BUBBLE_THEME = stringPreferencesKey("bubble_theme")
 
         val AI_PRESET = stringPreferencesKey("ai_preset")
         val LEGACY_AI_API_KEY = stringPreferencesKey("ai_api_key")
@@ -143,6 +148,18 @@ class SettingsDataStore(private val context: Context) {
             )
         }.getOrDefault(ClassicTextFitMode.WRAP_AND_EXPAND)
 
+        val bubbleBehavior = runCatching {
+            FloatingBubbleBehavior.valueOf(
+                prefs[Keys.BUBBLE_BEHAVIOR] ?: FloatingBubbleBehavior.HIDE_WHEN_ACTIVE.name
+            )
+        }.getOrDefault(FloatingBubbleBehavior.HIDE_WHEN_ACTIVE)
+
+        val bubbleTheme = runCatching {
+            FloatingBubbleTheme.valueOf(
+                prefs[Keys.BUBBLE_THEME] ?: FloatingBubbleTheme.NEON.name
+            )
+        }.getOrDefault(FloatingBubbleTheme.NEON)
+
         TranslationConfig(
             sourceLangCode = prefs[Keys.SOURCE_LANG] ?: TranslateLanguage.ENGLISH,
             targetLangCode = prefs[Keys.TARGET_LANG] ?: TranslateLanguage.TURKISH,
@@ -165,6 +182,8 @@ class SettingsDataStore(private val context: Context) {
             classicBoxY = prefs[Keys.CLASSIC_BOX_Y] ?: -1,
             classicBoxOpacity = (prefs[Keys.CLASSIC_BOX_OPACITY] ?: 0.86f).coerceIn(0f, 1f),
             classicTextFitMode = classicTextFitMode,
+            bubbleBehavior = bubbleBehavior,
+            bubbleTheme = bubbleTheme,
             aiPreset = preset,
             aiApiKey = activeApiKey,
             aiApiKeys = isolatedKeys,
@@ -217,6 +236,14 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun updateClassicTextFitMode(mode: ClassicTextFitMode) {
         context.dataStore.edit { it[Keys.CLASSIC_TEXT_FIT_MODE] = mode.name }
+    }
+
+    suspend fun updateBubbleBehavior(behavior: FloatingBubbleBehavior) {
+        context.dataStore.edit { it[Keys.BUBBLE_BEHAVIOR] = behavior.name }
+    }
+
+    suspend fun updateBubbleTheme(theme: FloatingBubbleTheme) {
+        context.dataStore.edit { it[Keys.BUBBLE_THEME] = theme.name }
     }
 
     suspend fun updateInPlacePaddingX(dp: Float) {

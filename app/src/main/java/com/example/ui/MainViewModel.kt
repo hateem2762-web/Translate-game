@@ -25,6 +25,8 @@ import com.example.model.AiModelOption
 import com.example.model.AiProviderPreset
 import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
+import com.example.model.FloatingBubbleBehavior
+import com.example.model.FloatingBubbleTheme
 import com.example.model.InPlaceBlock
 import com.example.model.ModelDownloadState
 import com.example.model.RoiRect
@@ -284,6 +286,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateClassicTextFitMode(mode: ClassicTextFitMode) {
         viewModelScope.launch { settingsStore.updateClassicTextFitMode(mode) }
+    }
+
+    fun updateBubbleBehavior(behavior: FloatingBubbleBehavior) {
+        viewModelScope.launch { settingsStore.updateBubbleBehavior(behavior) }
+    }
+
+    fun updateBubbleTheme(theme: FloatingBubbleTheme) {
+        viewModelScope.launch { settingsStore.updateBubbleTheme(theme) }
     }
 
     fun updateInPlacePaddingX(dp: Float) {

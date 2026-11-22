@@ -29,6 +29,7 @@ import com.example.engine.SmartAiTranslationProvider
 import com.example.engine.SubtitlePipeline
 import com.example.model.AiProviderPreset
 import com.example.model.DisplayMode
+import com.example.model.OverlayHubStage
 import com.example.model.ServiceStatus
 import com.example.model.TranslationConfig
 import com.example.model.TranslationEngineMode
@@ -61,6 +62,8 @@ class ScreenTranslatorService : Service() {
     private var captureLoopJob: Job? = null
     private var isPaused: Boolean = false
     private var isRoiLocked: Boolean = false
+    private var currentHubStage: OverlayHubStage = OverlayHubStage.BUBBLE_IDLE
+    private var lastInPlaceStealthPeekMs: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -103,6 +106,8 @@ class ScreenTranslatorService : Service() {
                     settingsStore.saveClassicBoxLayout(x, y, widthDp, heightDp)
                 }
             },
+            onSelectTranslationMode = { mode -> selectTranslationModeFromBubble(mode) },
+            onCloseActiveMode = { closeActiveModeToBubble() },
             onToggleDisplayMode = { toggleDisplayMode() },
             onToggleEngineMode = { toggleEngineMode() },
             onOpenModelPicker = {
@@ -157,6 +162,9 @@ class ScreenTranslatorService : Service() {
                     it.copy(
                         displayMode = config.displayMode,
                         engineMode = config.engineMode,
+                        bubbleBehavior = config.bubbleBehavior,
+                        bubbleTheme = config.bubbleTheme,
+                        overlayHubStage = currentHubStage,
                         fontSizeSp = config.fontSizeSp,
                         subtitleTextColorArgb = config.subtitleTextColorArgb,
                         inPlacePaddingXdp = config.inPlacePaddingXdp,
@@ -194,6 +202,9 @@ class ScreenTranslatorService : Service() {
                     prev.copy(
                         displayMode = currentConfig.displayMode,
                         engineMode = currentConfig.engineMode,
+                        bubbleBehavior = currentConfig.bubbleBehavior,
+                        bubbleTheme = currentConfig.bubbleTheme,
+                        overlayHubStage = currentHubStage,
                         fontSizeSp = currentConfig.fontSizeSp,
                         subtitleTextColorArgb = currentConfig.subtitleTextColorArgb,
                         inPlacePaddingXdp = currentConfig.inPlacePaddingXdp,
@@ -278,6 +289,8 @@ class ScreenTranslatorService : Service() {
             try {
                 isPaused = false
                 isRoiLocked = false
+                currentHubStage = OverlayHubStage.BUBBLE_IDLE
+                lastInPlaceStealthPeekMs = 0L
                 pipeline.reset()
 
                 val bounds = ScreenMetricsHelper.getScreenBounds(applicationContext)
@@ -308,6 +321,9 @@ class ScreenTranslatorService : Service() {
                         classicBoxY = currentConfig.classicBoxY,
                         classicBoxOpacity = currentConfig.classicBoxOpacity,
                         classicTextFitMode = currentConfig.classicTextFitMode,
+                        bubbleBehavior = currentConfig.bubbleBehavior,
+                        bubbleTheme = currentConfig.bubbleTheme,
+                        overlayHubStage = currentHubStage,
                         aiPreset = currentConfig.aiPreset,
                         aiModelName = currentConfig.aiModelName,
                         configuredPresets = configured,
@@ -338,54 +354,61 @@ class ScreenTranslatorService : Service() {
         captureLoopJob?.cancel()
         captureLoopJob = serviceScope.launch {
             while (isActive) {
+                val isModeActive = currentHubStage == OverlayHubStage.ACTIVE_MODE
                 val isInPlaceWithActiveMask =
-                    currentConfig.displayMode == DisplayMode.IN_PLACE_BLUR &&
+                    isModeActive &&
+                        currentConfig.displayMode == DisplayMode.IN_PLACE_BLUR &&
                         overlayController.hasActiveInPlaceOverlay()
 
-                if (!isPaused && !overlayController.isHistoryVisible()) {
+                if (isModeActive && !isPaused && !overlayController.isHistoryVisible()) {
                     val roi = overlayController.getActiveCaptureRoi()
                     val cleanBitmap = if (isInPlaceWithActiveMask) {
                         val isStabilizing = pipeline.isStabilizingOrPending()
+                        val nowMs = System.currentTimeMillis()
                         val shouldStealthCapture = when {
-                            // Debounce/translation already running -> keep overlay 100% solid, don't flash
                             isStabilizing -> false
                             pipeline.isAwaitingBlankClear() -> true
-                            !pipeline.canStealthPeekNow() -> {
+                            !pipeline.canStealthPeekNow(nowMs) -> {
                                 pipeline.recordPassiveSkip()
                                 false
                             }
                             else -> {
-                                // Passive check WITHOUT hiding overlay: compare pixels outside our exact
-                                // drawn blur boxes and ROI perimeter. Only stealth-peek on genuine scene change.
                                 val passiveBitmap = withContext(Dispatchers.Default) {
                                     captureManager.captureCroppedRoi(roi)
                                 }
-                                if (passiveBitmap == null) {
+                                val outerChanged = if (passiveBitmap == null) {
                                     false
                                 } else {
                                     val (maskRects, maskSignature) = overlayController.getActiveMaskRectsInRoi()
-                                    val changed = pipeline.hasUnmaskedVisualChange(
+                                    pipeline.hasUnmaskedVisualChange(
                                         bitmap = passiveBitmap,
                                         maskedRects = maskRects,
                                         maskSignature = maskSignature
                                     )
-                                    if (!changed) {
-                                        pipeline.recordPassiveSkip()
-                                    }
-                                    changed
+                                }
+                                // When outer pixels are static (e.g. dark subtitle bar / tight ROI), still
+                                // perform a single ultra-fast ~34ms peek every ~1.35s so new text underneath
+                                // is always detected instead of staying occluded behind the blur.
+                                val periodicDue = nowMs - lastInPlaceStealthPeekMs >= PERIODIC_BLUR_PEEK_MS
+                                if (!outerChanged && !periodicDue) {
+                                    pipeline.recordPassiveSkip()
+                                    false
+                                } else {
+                                    true
                                 }
                             }
                         }
 
                         if (shouldStealthCapture) {
+                            lastInPlaceStealthPeekMs = System.currentTimeMillis()
                             captureManager.drainPendingFrame()
                             val minValidTsNs = overlayController.hideInPlaceAndAwaitCommitNs()
                             try {
                                 captureManager.awaitAndCaptureStealthRoi(
                                     roi = roi,
                                     minValidTimestampNs = minValidTsNs,
-                                    settleMs = 22L,
-                                    maxWaitMs = 68L
+                                    settleMs = 18L,
+                                    maxWaitMs = 76L
                                 )
                             } finally {
                                 overlayController.setInPlaceStealth(false)
@@ -405,9 +428,10 @@ class ScreenTranslatorService : Service() {
                 }
 
                 val loopDelay = when {
+                    !isModeActive -> 240L
                     isInPlaceWithActiveMask && pipeline.isStabilizingOrPending() -> 180L
-                    isInPlaceWithActiveMask && pipeline.isAwaitingBlankClear() -> 320L
-                    isInPlaceWithActiveMask -> maxOf(currentConfig.scanIntervalMs, 700L)
+                    isInPlaceWithActiveMask && pipeline.isAwaitingBlankClear() -> 300L
+                    isInPlaceWithActiveMask -> maxOf(currentConfig.scanIntervalMs, 650L)
                     else -> currentConfig.scanIntervalMs.coerceIn(150L, 1200L)
                 }
                 delay(loopDelay)
@@ -449,15 +473,62 @@ class ScreenTranslatorService : Service() {
         }
     }
 
+    private fun selectTranslationModeFromBubble(mode: DisplayMode) {
+        currentHubStage = OverlayHubStage.ACTIVE_MODE
+        lastInPlaceStealthPeekMs = 0L
+        pipeline.reset()
+        if (currentConfig.displayMode != mode) {
+            currentConfig = currentConfig.copy(displayMode = mode)
+            serviceScope.launch(Dispatchers.IO) {
+                settingsStore.updateDisplayMode(mode)
+            }
+        }
+        ServiceStateHolder.update {
+            it.copy(
+                overlayHubStage = OverlayHubStage.ACTIVE_MODE,
+                displayMode = mode,
+                currentSourceText = "",
+                currentTranslatedText = "",
+                inPlaceBlocks = emptyList(),
+                isStabilizing = false,
+                isAiRefining = false,
+                errorMessage = null
+            )
+        }
+        overlayController.updateHud(
+            telemetry = ServiceStateHolder.telemetry.value,
+            showOriginal = currentConfig.showOriginalText
+        )
+    }
+
+    private fun closeActiveModeToBubble() {
+        currentHubStage = OverlayHubStage.BUBBLE_IDLE
+        lastInPlaceStealthPeekMs = 0L
+        pipeline.reset()
+        ServiceStateHolder.update {
+            it.copy(
+                overlayHubStage = OverlayHubStage.BUBBLE_IDLE,
+                currentSourceText = "",
+                currentTranslatedText = "",
+                inPlaceBlocks = emptyList(),
+                isStabilizing = false,
+                isAiRefining = false,
+                errorMessage = null
+            )
+        }
+        overlayController.updateHud(
+            telemetry = ServiceStateHolder.telemetry.value,
+            showOriginal = currentConfig.showOriginalText
+        )
+    }
+
     private fun toggleDisplayMode() {
         val next = if (currentConfig.displayMode == DisplayMode.CLASSIC_BOX) {
             DisplayMode.IN_PLACE_BLUR
         } else {
             DisplayMode.CLASSIC_BOX
         }
-        serviceScope.launch(Dispatchers.IO) {
-            settingsStore.updateDisplayMode(next)
-        }
+        selectTranslationModeFromBubble(next)
     }
 
     private fun toggleEngineMode() {
@@ -598,6 +669,7 @@ class ScreenTranslatorService : Service() {
     companion object {
         private const val CHANNEL_ID = "sublens_capture_channel"
         private const val NOTIFICATION_ID = 4201
+        private const val PERIODIC_BLUR_PEEK_MS = 1350L
 
         const val ACTION_START = "com.example.action.START_SUBTITLE_SERVICE"
         const val ACTION_STOP = "com.example.action.STOP_SUBTITLE_SERVICE"

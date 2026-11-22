@@ -7,6 +7,31 @@ enum class DisplayMode(val shortLabelTr: String) {
     IN_PLACE_BLUR("Doğal")
 }
 
+enum class FloatingBubbleBehavior(
+    val labelTr: String,
+    val descriptionTr: String
+) {
+    HIDE_WHEN_ACTIVE(
+        labelTr = "Balonu Gizle (X ile Dön)",
+        descriptionTr = "Mod seçilince balon kaybolur; aktif moddaki X tuşuna basınca balon geri gelir."
+    ),
+    DOCK_HALF_CIRCLE(
+        labelTr = "Yarım Yuvarlak (<) Dock",
+        descriptionTr = "Mod seçilince balon sağ alt kenara küçük bir < yarım yuvarlağı olarak yapışır."
+    )
+}
+
+enum class FloatingBubbleTheme(
+    val labelTr: String,
+    val subtitleTr: String
+) {
+    KWAI("Kwai", "Canlı kontrast & enerjik rozet"),
+    SADE("Sade", "Mat, temiz & minimalist"),
+    NEON("Neon", "Koyu zemin & parlak glow"),
+    KEDI("Kedi", "Kulaklı, bıyıklı & patili"),
+    KAPLUMBAGA("Kaplumbağa", "Kabuk deseni & zeytin yeşili")
+}
+
 enum class ClassicTextFitMode(val labelTr: String, val descriptionTr: String) {
     WRAP_AND_EXPAND(
         labelTr = "Satır Kaydır & Genişlet",
@@ -211,6 +236,8 @@ data class TranslationConfig(
     val classicBoxY: Int = -1,
     val classicBoxOpacity: Float = 0.86f,
     val classicTextFitMode: ClassicTextFitMode = ClassicTextFitMode.WRAP_AND_EXPAND,
+    val bubbleBehavior: FloatingBubbleBehavior = FloatingBubbleBehavior.HIDE_WHEN_ACTIVE,
+    val bubbleTheme: FloatingBubbleTheme = FloatingBubbleTheme.NEON,
     val aiPreset: AiProviderPreset = AiProviderPreset.GROQ,
     val aiApiKey: String = "",
     val aiApiKeys: Map<AiProviderPreset, String> = emptyMap(),

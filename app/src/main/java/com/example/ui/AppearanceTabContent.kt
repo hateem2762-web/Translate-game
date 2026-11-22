@@ -73,6 +73,8 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
+import com.example.model.FloatingBubbleBehavior
+import com.example.model.FloatingBubbleTheme
 import com.example.model.SubtitleColorPreset
 import com.example.ui.theme.CyanContainer
 import com.example.ui.theme.CyanPrimary
@@ -92,6 +94,8 @@ private val EXTRA_CUSTOM_SWATCHES = listOf(
 internal fun AppearanceTabContent(
     uiState: MainUiState,
     onSelectDisplayMode: (DisplayMode) -> Unit,
+    onBubbleBehaviorChange: (FloatingBubbleBehavior) -> Unit,
+    onBubbleThemeChange: (FloatingBubbleTheme) -> Unit,
     onSubtitleTextColorChange: (Int) -> Unit,
     onFontSizeSpChange: (Float) -> Unit,
     onClassicTextFitModeChange: (ClassicTextFitMode) -> Unit,
@@ -115,6 +119,15 @@ internal fun AppearanceTabContent(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        item {
+            FloatingBubbleSettingsCard(
+                bubbleBehavior = uiState.config.bubbleBehavior,
+                bubbleTheme = uiState.config.bubbleTheme,
+                onBubbleBehaviorChange = onBubbleBehaviorChange,
+                onBubbleThemeChange = onBubbleThemeChange
+            )
+        }
+
         item {
             DisplayModeSelectorCard(
                 displayMode = uiState.config.displayMode,

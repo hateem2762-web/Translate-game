@@ -44,4 +44,7 @@
     <string name="tab_sandbox">Canlı Test</string>
     <string name="sandbox_en_sample">The ancient seal is breaking! Find the key before the shadow consumes the village.</string>
     <string name="sandbox_zh_sample">古老的封印正在碎裂！在黑暗吞噬村庄之前，快找到钥匙。</string>
+    <string name="bubble_menu_title">Çeviri Modları &amp; Kontrol</string>
+    <string name="bubble_close_active_mode">Aktif Modu Kapat (Balona Dön)</string>
+    <string name="bubble_stop_completely">Tamamen Kapat</string>
 </resources>

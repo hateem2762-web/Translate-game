@@ -17,6 +17,11 @@ enum class ModelDownloadState {
     ERROR
 }
 
+enum class OverlayHubStage {
+    BUBBLE_IDLE,
+    ACTIVE_MODE
+}
+
 data class InPlaceBlock(
     val boundingBox: RoiRect,
     val sourceText: String,
@@ -51,6 +56,9 @@ data class TranslatorTelemetry(
     val classicBoxY: Int = -1,
     val classicBoxOpacity: Float = 0.86f,
     val classicTextFitMode: ClassicTextFitMode = ClassicTextFitMode.WRAP_AND_EXPAND,
+    val bubbleBehavior: FloatingBubbleBehavior = FloatingBubbleBehavior.HIDE_WHEN_ACTIVE,
+    val bubbleTheme: FloatingBubbleTheme = FloatingBubbleTheme.NEON,
+    val overlayHubStage: OverlayHubStage = OverlayHubStage.BUBBLE_IDLE,
     val currentSourceText: String = "",
     val currentTranslatedText: String = "",
     val inPlaceBlocks: List<InPlaceBlock> = emptyList(),

@@ -14,7 +14,6 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewConfiguration
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -28,15 +27,14 @@ import com.example.model.DisplayMode
 import com.example.model.ServiceStatus
 import com.example.model.TranslationEngineMode
 import com.example.model.TranslatorTelemetry
-import kotlin.math.abs
 
 /**
- * Dual-mode floating HUD:
- * - In CLASSIC_BOX mode: renders a draggable & corner-resizable dark translucent subtitle box with
- *   independent background-only opacity (0%-100%), always-100%-opaque outlined/shadowed text,
- *   scrollable text area, and a quick Dialogue History button.
- * - In IN_PLACE_BLUR mode: hides the separate subtitle panel and collapses into a draggable
- *   circular floating corner button that expands a compact quick-control menu (including History).
+ * Active-mode floating HUD:
+ * - In CLASSIC_BOX mode: draggable & corner-resizable translucent subtitle box with independent
+ *   background-only opacity, 100%-opaque outlined text, quick chips, and an "X" button that closes
+ *   the active mode and returns to the floating control bubble.
+ * - In IN_PLACE_BLUR mode: collapses to a compact clickable "X" close badge anchored at the edge of
+ *   the active blur region (stays clickable even when ROI is locked) to return to the control bubble.
  */
 @SuppressLint("ViewConstructor")
 class SubtitleHudOverlayView(
@@ -52,14 +50,11 @@ class SubtitleHudOverlayView(
     private val onTogglePause: () -> Unit,
     private val onToggleLockRoi: () -> Unit,
     private val onOpenHistory: () -> Unit = {},
-    private val onOpenSettings: () -> Unit,
-    private val onStopService: () -> Unit,
-    private val onMenuExpansionChanged: (expanded: Boolean) -> Unit = {}
+    private val onCloseActiveMode: () -> Unit
 ) : FrameLayout(context) {
 
     private val density = resources.displayMetrics.density
     private val scaledDensity = resources.displayMetrics.scaledDensity
-    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private val jakartaFont = ResourcesCompat.getFont(context, R.font.plus_jakarta_sans)
     private val measurePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = jakartaFont
@@ -85,37 +80,22 @@ class SubtitleHudOverlayView(
     private val originalTextView: OutlinedSubtitleTextView
     private val classicResizeGrip: ClassicResizeGripView
 
-    // In-Place circular floating corner button & expandable quick menu
-    private val cornerRoot: LinearLayout
-    private val cornerMenuPill: LinearLayout
-    private val cornerMenuBg: GradientDrawable
-    private val cornerModeChip: TextView
-    private val cornerEngineChip: TextView
-    private val cornerModelChip: TextView
-    private val cornerHistoryButton: ImageButton
-    private val cornerPauseButton: ImageButton
-    private val cornerLockButton: ImageButton
-    private val cornerSettingsButton: ImageButton
-    private val cornerStopButton: ImageButton
-    private val cornerErrorBanner: TextView
+    // Active In-Place Blur compact "X" close-to-bubble badge & optional error banner
+    private val inPlaceHandleContainer: LinearLayout
+    private val inPlaceCloseButton: ImageButton
+    private val inPlaceCloseBg: GradientDrawable
+    private val inPlaceErrorBanner: TextView
 
-    private val cornerFabContainer: FrameLayout
-    private val cornerFabBg: GradientDrawable
-    private val cornerFabIcon: ImageView
-    private val cornerFabStatusDot: View
-
-    private var isCornerMenuExpanded: Boolean = false
     private var isClassicBoxStealth: Boolean = false
     private var lastClassicBoxOpacity: Float = 0.86f
     private var currentDisplayMode: DisplayMode = DisplayMode.CLASSIC_BOX
-
     private var lastDesiredExpandedHeightPx: Int = -1
     private val headerRow: LinearLayout
 
     init {
         val monoFont = ResourcesCompat.getFont(context, R.font.jetbrains_mono)
 
-        // 1. Classic Box Layout (resizable wrapper + scrollable outlined text + corner grip)
+        // 1. Classic Box Layout
         classicWrapper = FrameLayout(context)
 
         classicBgDrawable = GradientDrawable().apply {
@@ -184,8 +164,12 @@ class SubtitleHudOverlayView(
         classicLockButton = createHudButton(R.drawable.ic_hud_unlock, "Bölgeyi kilitle veya düzenle", sizeDp = 28f) {
             onToggleLockRoi()
         }
-        classicStopButton = createHudButton(R.drawable.ic_hud_close, "Çeviriyi durdur", sizeDp = 28f) {
-            onStopService()
+        classicStopButton = createHudButton(
+            R.drawable.ic_hud_close,
+            "Aktif çeviri modunu kapat ve balona dön",
+            sizeDp = 28f
+        ) {
+            onCloseActiveMode()
         }
         classicStealthButton = createHudButton(
             R.drawable.ic_hud_visibility,
@@ -283,149 +267,52 @@ class SubtitleHudOverlayView(
 
         addView(classicWrapper, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
 
-        // 2. In-Place Floating Circular Corner Button + Expandable Menu
-        cornerRoot = LinearLayout(context).apply {
+        // 2. Active In-Place Blur "X" close-to-bubble edge badge
+        inPlaceHandleContainer = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.END
             visibility = View.GONE
         }
 
-        val topCornerRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        cornerMenuBg = GradientDrawable().apply {
-            setColor(Color.argb(232, 9, 14, 23))
-            cornerRadius = dp(24f).toFloat()
-            setStroke(dp(1f), Color.parseColor("#6622D3EE"))
-        }
-
-        cornerMenuPill = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8f), dp(4f), dp(6f), dp(4f))
-            background = cornerMenuBg
-            visibility = View.GONE
-        }
-
-        cornerModeChip = createToggleChip(monoFont) { onToggleDisplayMode() }
-        cornerEngineChip = createToggleChip(monoFont) { onToggleEngineMode() }
-        cornerModelChip = createToggleChip(monoFont) {
-            collapseCornerMenu()
-            onOpenModelPicker()
-        }.apply {
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            maxWidth = dp(82f)
-            contentDescription = "AI modelini seç"
-        }
-        cornerHistoryButton = createHudButton(R.drawable.ic_hud_history, "Diyalog geçmişini aç") {
-            collapseCornerMenu()
-            onOpenHistory()
-        }
-        cornerPauseButton = createHudButton(R.drawable.ic_hud_pause, "Duraklat veya devam et") {
-            onTogglePause()
-        }
-        cornerLockButton = createHudButton(R.drawable.ic_hud_unlock, "Bölgeyi kilitle veya düzenle") {
-            onToggleLockRoi()
-        }
-        cornerSettingsButton = createHudButton(R.drawable.ic_hud_settings, "Ayarları aç") {
-            collapseCornerMenu()
-            onOpenSettings()
-        }
-        cornerStopButton = createHudButton(R.drawable.ic_hud_close, "Çeviriyi durdur") {
-            onStopService()
-        }
-
-        cornerMenuPill.addView(cornerModeChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30f)).apply {
-            marginEnd = dp(3f)
-        })
-        cornerMenuPill.addView(cornerEngineChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30f)).apply {
-            marginEnd = dp(3f)
-        })
-        cornerMenuPill.addView(cornerModelChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30f)).apply {
-            marginEnd = dp(2f)
-        })
-        cornerMenuPill.addView(cornerHistoryButton)
-        cornerMenuPill.addView(cornerPauseButton)
-        cornerMenuPill.addView(cornerLockButton)
-        cornerMenuPill.addView(cornerSettingsButton)
-        cornerMenuPill.addView(cornerStopButton)
-
-        topCornerRow.addView(
-            cornerMenuPill,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                marginEnd = dp(6f)
-            }
-        )
-
-        val fabSize = dp(48f)
-        cornerFabBg = GradientDrawable().apply {
+        inPlaceCloseBg = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(Color.argb(232, 9, 14, 23))
-            setStroke(dp(1.5f), Color.parseColor("#B322D3EE"))
+            setColor(Color.argb(228, 9, 14, 23))
+            setStroke(dp(1.4f), Color.argb(190, 251, 113, 133))
         }
-        cornerFabContainer = FrameLayout(context).apply {
-            background = cornerFabBg
-            elevation = dp(4f).toFloat()
-            contentDescription = "SubLens hızlı kontrol menüsü"
-        }
-
-        cornerFabIcon = ImageView(context).apply {
-            setImageResource(R.drawable.ic_hud_blur)
-            setColorFilter(Color.parseColor("#22D3EE"))
+        inPlaceCloseButton = ImageButton(context).apply {
+            setImageResource(R.drawable.ic_hud_close)
+            contentDescription = "Doğal Blur modunu kapat ve balona dön"
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            setPadding(dp(11f), dp(11f), dp(11f), dp(11f))
+            setColorFilter(Color.parseColor("#FFE4E6"))
+            background = inPlaceCloseBg
+            elevation = dp(4f).toFloat()
+            setPadding(dp(9f), dp(9f), dp(9f), dp(9f))
+            setOnClickListener { onCloseActiveMode() }
         }
-        cornerFabContainer.addView(cornerFabIcon, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        inPlaceHandleContainer.addView(inPlaceCloseButton, LinearLayout.LayoutParams(dp(38f), dp(38f)))
 
-        cornerFabStatusDot = View(context).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#10B981"))
-                setStroke(dp(1f), Color.parseColor("#090E17"))
-            }
-        }
-        cornerFabContainer.addView(
-            cornerFabStatusDot,
-            LayoutParams(dp(10f), dp(10f)).apply {
-                gravity = Gravity.TOP or Gravity.END
-                topMargin = dp(5f)
-                marginEnd = dp(5f)
-            }
-        )
-
-        setupCornerFabTouchListener(cornerFabContainer)
-
-        topCornerRow.addView(cornerFabContainer, LinearLayout.LayoutParams(fabSize, fabSize))
-        cornerRoot.addView(
-            topCornerRow,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        )
-
-        cornerErrorBanner = TextView(context).apply {
+        inPlaceErrorBanner = TextView(context).apply {
             visibility = View.GONE
             setTextColor(Color.parseColor("#FECDD3"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             typeface = jakartaFont
             setPadding(dp(10f), dp(6f), dp(10f), dp(6f))
-            maxLines = 3
+            maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
             background = GradientDrawable().apply {
                 setColor(Color.argb(235, 69, 10, 26))
-                cornerRadius = dp(12f).toFloat()
+                cornerRadius = dp(10f).toFloat()
                 setStroke(dp(1f), Color.parseColor("#FB7185"))
             }
         }
-        cornerRoot.addView(
-            cornerErrorBanner,
-            LinearLayout.LayoutParams(dp(250f), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(6f)
+        inPlaceHandleContainer.addView(
+            inPlaceErrorBanner,
+            LinearLayout.LayoutParams(dp(220f), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(4f)
             }
         )
 
-        addView(cornerRoot, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        addView(inPlaceHandleContainer, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
     }
 
     /**
@@ -461,11 +348,16 @@ class SubtitleHudOverlayView(
             chip.isClickable = interactive
             chip.isEnabled = interactive
         }
-        listOf(classicHistoryButton, classicPauseButton, classicLockButton, classicStopButton).forEach { btn ->
+        // Keep X close-to-bubble button accessible or restore with stealth button
+        listOf(classicHistoryButton, classicPauseButton, classicLockButton).forEach { btn ->
             btn.visibility = chromeVis
             btn.isClickable = interactive
             btn.isEnabled = interactive
         }
+        classicStopButton.visibility = View.VISIBLE
+        classicStopButton.isClickable = true
+        classicStopButton.isEnabled = true
+
         classicResizeGrip.visibility = chromeVis
         classicResizeGrip.isEnabled = interactive
 
@@ -478,20 +370,18 @@ class SubtitleHudOverlayView(
                 setColor(Color.argb(115, 9, 14, 23))
                 setStroke(dp(1f), Color.argb(120, 148, 163, 184))
             }
+            classicStopButton.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.argb(115, 9, 14, 23))
+                setStroke(dp(1f), Color.argb(120, 251, 113, 133))
+            }
         } else {
             classicStealthButton.setImageResource(R.drawable.ic_hud_visibility)
             classicStealthButton.setColorFilter(Color.parseColor("#E2E8F0"))
             classicStealthButton.setBackgroundColor(Color.TRANSPARENT)
+            classicStopButton.setBackgroundColor(Color.TRANSPARENT)
         }
         updateClassicBoxOpacity(lastClassicBoxOpacity)
-    }
-
-    fun isCornerMenuOpen(): Boolean = isCornerMenuExpanded
-
-    private fun collapseCornerMenu() {
-        isCornerMenuExpanded = false
-        cornerMenuPill.visibility = View.GONE
-        onMenuExpansionChanged(false)
     }
 
     fun render(telemetry: TranslatorTelemetry, showOriginal: Boolean) {
@@ -502,17 +392,6 @@ class SubtitleHudOverlayView(
             else -> Color.parseColor("#22D3EE")
         }
         (statusDot.background as? GradientDrawable)?.setColor(dotColor)
-        (cornerFabStatusDot.background as? GradientDrawable)?.setColor(
-            if (telemetry.status == ServiceStatus.RUNNING &&
-                telemetry.errorMessage == null &&
-                !telemetry.isStabilizing &&
-                !telemetry.isAiRefining
-            ) {
-                Color.parseColor("#10B981")
-            } else {
-                dotColor
-            }
-        )
 
         val isBlur = telemetry.displayMode == DisplayMode.IN_PLACE_BLUR
         val engineAccentHex = when (telemetry.engineMode) {
@@ -522,151 +401,142 @@ class SubtitleHudOverlayView(
         }
         val engineHighlighted = telemetry.engineMode != TranslationEngineMode.OFFLINE_LOCAL
 
-        if (isBlur != (currentDisplayMode == DisplayMode.IN_PLACE_BLUR)) {
+        if (isBlur != (currentDisplayMode == DisplayMode.IN_PLACE_BLUR) ||
+            (isBlur && inPlaceHandleContainer.visibility != View.VISIBLE) ||
+            (!isBlur && classicWrapper.visibility != View.VISIBLE)
+        ) {
             currentDisplayMode = telemetry.displayMode
             if (isBlur) {
                 classicWrapper.visibility = View.GONE
-                cornerRoot.visibility = View.VISIBLE
-                isCornerMenuExpanded = false
-                cornerMenuPill.visibility = View.GONE
+                inPlaceHandleContainer.visibility = View.VISIBLE
             } else {
-                cornerRoot.visibility = View.GONE
+                inPlaceHandleContainer.visibility = View.GONE
                 classicWrapper.visibility = View.VISIBLE
-                isCornerMenuExpanded = false
-                cornerMenuPill.visibility = View.GONE
             }
         }
 
-        // Update chip & button states on both layouts
+        if (isBlur) {
+            inPlaceCloseBg.setStroke(
+                dp(1.4f),
+                if (telemetry.errorMessage != null) Color.parseColor("#FB7185") else Color.parseColor(engineAccentHex)
+            )
+            if (telemetry.errorMessage != null) {
+                inPlaceErrorBanner.visibility = View.VISIBLE
+                inPlaceErrorBanner.text = telemetry.errorMessage
+            } else {
+                inPlaceErrorBanner.visibility = View.GONE
+            }
+            return
+        }
+
+        // Classic Box updates
         classicModeChip.text = telemetry.displayMode.shortLabelTr
-        cornerModeChip.text = telemetry.displayMode.shortLabelTr
-        styleChip(classicModeChip, highlighted = isBlur, highlightColor = "#22D3EE")
-        styleChip(cornerModeChip, highlighted = isBlur, highlightColor = "#22D3EE")
+        styleChip(classicModeChip, highlighted = false, highlightColor = "#22D3EE")
 
         classicEngineChip.text = telemetry.engineMode.shortLabelTr
-        cornerEngineChip.text = telemetry.engineMode.shortLabelTr
         styleChip(classicEngineChip, highlighted = engineHighlighted, highlightColor = engineAccentHex)
-        styleChip(cornerEngineChip, highlighted = engineHighlighted, highlightColor = engineAccentHex)
 
         val shortModel = compactModelLabel(telemetry.aiModelName)
         classicModelChip.text = shortModel
-        cornerModelChip.text = shortModel
         styleChip(classicModelChip, highlighted = engineHighlighted, highlightColor = "#F59E0B")
-        styleChip(cornerModelChip, highlighted = engineHighlighted, highlightColor = "#F59E0B")
 
         val pauseRes = if (telemetry.status == ServiceStatus.PAUSED) R.drawable.ic_hud_play else R.drawable.ic_hud_pause
         val lockRes = if (telemetry.isRoiLocked) R.drawable.ic_hud_lock else R.drawable.ic_hud_unlock
         classicPauseButton.setImageResource(pauseRes)
-        cornerPauseButton.setImageResource(pauseRes)
         classicLockButton.setImageResource(lockRes)
-        cornerLockButton.setImageResource(lockRes)
 
-        if (isBlur) {
-            cornerFabIcon.setColorFilter(Color.parseColor(engineAccentHex))
-            cornerFabBg.setStroke(
-                dp(1.5f),
-                if (telemetry.errorMessage != null) Color.parseColor("#FB7185") else Color.parseColor(engineAccentHex)
-            )
-            if (isCornerMenuExpanded && telemetry.errorMessage != null) {
-                cornerErrorBanner.visibility = View.VISIBLE
-                cornerErrorBanner.text = telemetry.errorMessage
-            } else {
-                cornerErrorBanner.visibility = View.GONE
-            }
+        applyClassicStealthVisibility()
+
+        statusLabel.text = when {
+            telemetry.status == ServiceStatus.PAUSED -> "DURAKLAT"
+            telemetry.errorMessage != null -> "HATA"
+            telemetry.isStabilizing -> "BEKLE…"
+            telemetry.isAiRefining -> "AI DÜZELTİYOR…"
+            telemetry.lastFromCache && telemetry.currentTranslatedText.isNotEmpty() ->
+                "CACHE ${telemetry.lastLatencyMs}ms"
+            telemetry.currentTranslatedText.isNotEmpty() ->
+                "${telemetry.lastLatencyMs}ms"
+            else -> "HAZIR"
+        }
+
+        val targetSp = telemetry.fontSizeSp.coerceIn(12f, 32f)
+        translatedTextView.visibility = View.VISIBLE
+        translatedTextView.setTextColor(telemetry.subtitleTextColorArgb)
+
+        val nextText = when {
+            telemetry.errorMessage != null -> telemetry.errorMessage
+            telemetry.currentTranslatedText.isNotBlank() -> telemetry.currentTranslatedText
+            else -> context.getString(R.string.overlay_waiting_subtitle)
+        }
+
+        val boxW = if (classicWrapper.width > 0) {
+            classicWrapper.width
         } else {
-            applyClassicStealthVisibility()
+            dp(telemetry.classicBoxWidthDp.coerceIn(200, 440).toFloat())
+        }
+        val availTextW = (boxW - dp(22f)).coerceAtLeast(dp(120f))
+        val headerH = if (headerRow.height > 0) headerRow.height else dp(32f)
+        val baseBoxH = dp(telemetry.classicBoxHeightDp.coerceIn(84, 340).toFloat())
+        val verticalChromePx = headerH + dp(20f)
+        val availTextH = (baseBoxH - verticalChromePx).coerceAtLeast(dp(24f))
 
-            statusLabel.text = when {
-                telemetry.status == ServiceStatus.PAUSED -> "DURAKLAT"
-                telemetry.errorMessage != null -> "HATA"
-                telemetry.isStabilizing -> "BEKLE…"
-                telemetry.isAiRefining -> "AI DÜZELTİYOR…"
-                telemetry.lastFromCache && telemetry.currentTranslatedText.isNotEmpty() ->
-                    "CACHE ${telemetry.lastLatencyMs}ms"
-                telemetry.currentTranslatedText.isNotEmpty() ->
-                    "${telemetry.lastLatencyMs}ms"
-                else -> "HAZIR"
-            }
+        val showOrigRow = !isClassicBoxStealth && showOriginal && telemetry.currentSourceText.isNotBlank()
+        val origExtraH = if (showOrigRow) {
+            val origSp = (targetSp - 3.5f).coerceAtLeast(11f)
+            measurePaint.textSize = origSp * scaledDensity
+            val origLayout = StaticLayout.Builder
+                .obtain(telemetry.currentSourceText, 0, telemetry.currentSourceText.length, measurePaint, availTextW)
+                .setLineSpacing(0f, 1.0f)
+                .setIncludePad(false)
+                .build()
+            origLayout.height + dp(6f)
+        } else {
+            0
+        }
 
-            val targetSp = telemetry.fontSizeSp.coerceIn(12f, 32f)
-            translatedTextView.visibility = View.VISIBLE
-            translatedTextView.setTextColor(telemetry.subtitleTextColorArgb)
+        val effectiveAvailForTranslatedH = (availTextH - origExtraH).coerceAtLeast(dp(20f))
 
-            val nextText = when {
-                telemetry.errorMessage != null -> telemetry.errorMessage
-                telemetry.currentTranslatedText.isNotBlank() -> telemetry.currentTranslatedText
-                else -> context.getString(R.string.overlay_waiting_subtitle)
-            }
+        val resolvedSp = when (telemetry.classicTextFitMode) {
+            ClassicTextFitMode.WRAP_AND_EXPAND -> targetSp
+            ClassicTextFitMode.AUTO_FIT_SHRINK -> resolveAutoFitFontSp(
+                text = nextText,
+                targetSp = targetSp,
+                availWidthPx = availTextW,
+                availHeightPx = effectiveAvailForTranslatedH
+            )
+        }
 
-            val boxW = if (classicWrapper.width > 0) {
-                classicWrapper.width
-            } else {
-                dp(telemetry.classicBoxWidthDp.coerceIn(200, 440).toFloat())
-            }
-            val availTextW = (boxW - dp(22f)).coerceAtLeast(dp(120f))
-            val headerH = if (headerRow.height > 0) headerRow.height else dp(32f)
-            val baseBoxH = dp(telemetry.classicBoxHeightDp.coerceIn(84, 340).toFloat())
-            val verticalChromePx = headerH + dp(20f)
-            val availTextH = (baseBoxH - verticalChromePx).coerceAtLeast(dp(24f))
+        translatedTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, resolvedSp)
+        if (translatedTextView.text.toString() != nextText) {
+            translatedTextView.text = nextText
+            textScrollView.scrollTo(0, 0)
+        }
 
-            val showOrigRow = !isClassicBoxStealth && showOriginal && telemetry.currentSourceText.isNotBlank()
-            val origExtraH = if (showOrigRow) {
-                val origSp = (targetSp - 3.5f).coerceAtLeast(11f)
-                measurePaint.textSize = origSp * scaledDensity
-                val origLayout = StaticLayout.Builder
-                    .obtain(telemetry.currentSourceText, 0, telemetry.currentSourceText.length, measurePaint, availTextW)
-                    .setLineSpacing(0f, 1.0f)
-                    .setIncludePad(false)
-                    .build()
-                origLayout.height + dp(6f)
-            } else {
-                0
-            }
+        if (showOrigRow) {
+            originalTextView.visibility = View.VISIBLE
+            originalTextView.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                (resolvedSp - 3.5f).coerceAtLeast(11f)
+            )
+            originalTextView.text = telemetry.currentSourceText
+        } else {
+            originalTextView.visibility = View.GONE
+        }
 
-            val effectiveAvailForTranslatedH = (availTextH - origExtraH).coerceAtLeast(dp(20f))
-
-            val resolvedSp = when (telemetry.classicTextFitMode) {
-                ClassicTextFitMode.WRAP_AND_EXPAND -> targetSp
-                ClassicTextFitMode.AUTO_FIT_SHRINK -> resolveAutoFitFontSp(
-                    text = nextText,
-                    targetSp = targetSp,
-                    availWidthPx = availTextW,
-                    availHeightPx = effectiveAvailForTranslatedH
-                )
-            }
-
-            translatedTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, resolvedSp)
-            if (translatedTextView.text.toString() != nextText) {
-                translatedTextView.text = nextText
-                textScrollView.scrollTo(0, 0)
-            }
-
-            if (showOrigRow) {
-                originalTextView.visibility = View.VISIBLE
-                originalTextView.setTextSize(
-                    TypedValue.COMPLEX_UNIT_SP,
-                    (resolvedSp - 3.5f).coerceAtLeast(11f)
-                )
-                originalTextView.text = telemetry.currentSourceText
-            } else {
-                originalTextView.visibility = View.GONE
-            }
-
-            val desiredBoxHeightPx = if (telemetry.classicTextFitMode == ClassicTextFitMode.WRAP_AND_EXPAND) {
-                measurePaint.textSize = resolvedSp * scaledDensity
-                val transLayout = StaticLayout.Builder
-                    .obtain(nextText, 0, nextText.length, measurePaint, availTextW)
-                    .setLineSpacing(dp(2.5f).toFloat(), 1.0f)
-                    .setIncludePad(false)
-                    .build()
-                maxOf(baseBoxH, verticalChromePx + transLayout.height + origExtraH + dp(4f))
-            } else {
-                baseBoxH
-            }
-            if (desiredBoxHeightPx != lastDesiredExpandedHeightPx) {
-                lastDesiredExpandedHeightPx = desiredBoxHeightPx
-                onClassicDesiredHeightChanged(desiredBoxHeightPx)
-            }
+        val desiredBoxHeightPx = if (telemetry.classicTextFitMode == ClassicTextFitMode.WRAP_AND_EXPAND) {
+            measurePaint.textSize = resolvedSp * scaledDensity
+            val transLayout = StaticLayout.Builder
+                .obtain(nextText, 0, nextText.length, measurePaint, availTextW)
+                .setLineSpacing(dp(2.5f).toFloat(), 1.0f)
+                .setIncludePad(false)
+                .build()
+            maxOf(baseBoxH, verticalChromePx + transLayout.height + origExtraH + dp(4f))
+        } else {
+            baseBoxH
+        }
+        if (desiredBoxHeightPx != lastDesiredExpandedHeightPx) {
+            lastDesiredExpandedHeightPx = desiredBoxHeightPx
+            onClassicDesiredHeightChanged(desiredBoxHeightPx)
         }
     }
 
@@ -680,7 +550,6 @@ class SubtitleHudOverlayView(
         val minSp = 11f
         if (targetSp <= minSp) return minSp
 
-        // 1. Prefer keeping text on 1 clean line without breaking awkwardly if achievable >= 11sp
         if (!text.contains('\n')) {
             var sp = targetSp
             while (sp >= minSp) {
@@ -692,7 +561,6 @@ class SubtitleHudOverlayView(
             }
         }
 
-        // 2. For multi-line / long dialogue that exceeds 1 line even at 11sp, fit cleanly inside availHeightPx
         var sp = targetSp
         while (sp > minSp) {
             measurePaint.textSize = sp * scaledDensity
@@ -758,54 +626,6 @@ class SubtitleHudOverlayView(
             setPadding(dp(4.5f), dp(4.5f), dp(4.5f), dp(4.5f))
             layoutParams = LinearLayout.LayoutParams(size, size)
             setOnClickListener { onClick() }
-        }
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun setupCornerFabTouchListener(target: View) {
-        var downRawX = 0f
-        var downRawY = 0f
-        var lastRawX = 0f
-        var lastRawY = 0f
-        var isDragging = false
-
-        target.setOnTouchListener { _, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downRawX = event.rawX
-                    downRawY = event.rawY
-                    lastRawX = event.rawX
-                    lastRawY = event.rawY
-                    isDragging = false
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val totalDx = abs(event.rawX - downRawX)
-                    val totalDy = abs(event.rawY - downRawY)
-                    if (totalDx > touchSlop || totalDy > touchSlop) {
-                        isDragging = true
-                    }
-                    if (isDragging) {
-                        val dx = (event.rawX - lastRawX).toInt()
-                        val dy = (event.rawY - lastRawY).toInt()
-                        if (dx != 0 || dy != 0) {
-                            lastRawX = event.rawX
-                            lastRawY = event.rawY
-                            onDragDelta(dx, dy)
-                        }
-                    }
-                    true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!isDragging) {
-                        isCornerMenuExpanded = !isCornerMenuExpanded
-                        cornerMenuPill.visibility = if (isCornerMenuExpanded) View.VISIBLE else View.GONE
-                        onMenuExpansionChanged(isCornerMenuExpanded)
-                    }
-                    true
-                }
-                else -> false
-            }
         }
     }
 

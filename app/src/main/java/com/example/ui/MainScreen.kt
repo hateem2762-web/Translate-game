@@ -66,7 +66,10 @@ import com.example.R
 import com.example.model.AiProviderPreset
 import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
+import com.example.model.FloatingBubbleBehavior
+import com.example.model.FloatingBubbleTheme
 import com.example.model.ModelDownloadState
+import com.example.model.OverlayHubStage
 import com.example.model.ServiceStatus
 import com.example.model.SupportedLanguage
 import com.example.model.TranslationEngineMode
@@ -98,6 +101,8 @@ fun MainScreen(
     onDownloadModelClick: () -> Unit,
     onSelectDisplayMode: (DisplayMode) -> Unit,
     onSelectEngineMode: (TranslationEngineMode) -> Unit,
+    onBubbleBehaviorChange: (FloatingBubbleBehavior) -> Unit,
+    onBubbleThemeChange: (FloatingBubbleTheme) -> Unit,
     onFontSizeSpChange: (Float) -> Unit,
     onSubtitleTextColorChange: (Int) -> Unit,
     onClassicTextFitModeChange: (ClassicTextFitMode) -> Unit,
@@ -257,6 +262,8 @@ fun MainScreen(
                         MainTab.APPEARANCE -> AppearanceTabContent(
                             uiState = uiState,
                             onSelectDisplayMode = onSelectDisplayMode,
+                            onBubbleBehaviorChange = onBubbleBehaviorChange,
+                            onBubbleThemeChange = onBubbleThemeChange,
                             onSubtitleTextColorChange = onSubtitleTextColorChange,
                             onFontSizeSpChange = onFontSizeSpChange,
                             onClassicTextFitModeChange = onClassicTextFitModeChange,
@@ -313,11 +320,13 @@ private fun HeroHeaderBar(uiState: MainUiState) {
         label = "statusColor"
     )
 
-    val statusText = when (uiState.telemetry.status) {
-        ServiceStatus.RUNNING -> stringResource(R.string.status_running)
-        ServiceStatus.PAUSED -> stringResource(R.string.status_paused)
-        ServiceStatus.ERROR -> uiState.telemetry.errorMessage ?: "Hata"
-        ServiceStatus.IDLE -> stringResource(R.string.status_idle)
+    val statusText = when {
+        uiState.telemetry.status == ServiceStatus.RUNNING &&
+            uiState.telemetry.overlayHubStage == OverlayHubStage.BUBBLE_IDLE -> "Balon Hazır"
+        uiState.telemetry.status == ServiceStatus.RUNNING -> stringResource(R.string.status_running)
+        uiState.telemetry.status == ServiceStatus.PAUSED -> stringResource(R.string.status_paused)
+        uiState.telemetry.status == ServiceStatus.ERROR -> uiState.telemetry.errorMessage ?: "Hata"
+        else -> stringResource(R.string.status_idle)
     }
 
     Row(
@@ -351,10 +360,13 @@ private fun HeroHeaderBar(uiState: MainUiState) {
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onBackground
                 )
-                val subText = if (uiState.telemetry.framesProcessed > 0 || uiState.telemetry.framesSkippedSameText > 0) {
-                    "Kare: ${uiState.telemetry.framesProcessed} • Atlanan: ${uiState.telemetry.framesSkippedSameText} • Cache: ${uiState.telemetry.cacheHits}"
-                } else {
-                    "${uiState.config.displayMode.shortLabelTr} • ${uiState.config.engineMode.shortLabelTr} Mod"
+                val subText = when {
+                    uiState.telemetry.status == ServiceStatus.RUNNING &&
+                        uiState.telemetry.overlayHubStage == OverlayHubStage.BUBBLE_IDLE ->
+                        "Balona dokunup çeviri modunu seçin • ${uiState.config.bubbleTheme.labelTr}"
+                    uiState.telemetry.framesProcessed > 0 || uiState.telemetry.framesSkippedSameText > 0 ->
+                        "Kare: ${uiState.telemetry.framesProcessed} • Atlanan: ${uiState.telemetry.framesSkippedSameText} • Cache: ${uiState.telemetry.cacheHits}"
+                    else -> "${uiState.config.displayMode.shortLabelTr} • ${uiState.config.engineMode.shortLabelTr} Mod"
                 }
                 Text(
                     text = subText,

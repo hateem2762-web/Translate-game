@@ -55,6 +55,7 @@ object ServiceStateHolder {
         _telemetry.update { current ->
             current.copy(
                 status = ServiceStatus.IDLE,
+                overlayHubStage = com.example.model.OverlayHubStage.BUBBLE_IDLE,
                 isStabilizing = false,
                 isRoiLocked = false,
                 errorMessage = null

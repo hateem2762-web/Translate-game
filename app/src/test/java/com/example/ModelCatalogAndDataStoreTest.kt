@@ -244,4 +244,25 @@ class ModelCatalogAndDataStoreTest {
         assertEquals(0xFF93C5FD.toInt(), updated.subtitleTextColorArgb)
         assertEquals(com.example.model.ClassicTextFitMode.WRAP_AND_EXPAND, updated.classicTextFitMode)
     }
+
+    @Test
+    fun `SettingsDataStore persists floating bubble behavior and all 5 themes`(): Unit = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = SettingsDataStore(context)
+
+        assertEquals(2, com.example.model.FloatingBubbleBehavior.entries.size)
+        assertEquals(5, com.example.model.FloatingBubbleTheme.entries.size)
+
+        store.updateBubbleBehavior(com.example.model.FloatingBubbleBehavior.DOCK_HALF_CIRCLE)
+        for (theme in com.example.model.FloatingBubbleTheme.entries) {
+            store.updateBubbleTheme(theme)
+            val cfg = store.configFlow.first()
+            assertEquals(com.example.model.FloatingBubbleBehavior.DOCK_HALF_CIRCLE, cfg.bubbleBehavior)
+            assertEquals(theme, cfg.bubbleTheme)
+        }
+
+        store.updateBubbleBehavior(com.example.model.FloatingBubbleBehavior.HIDE_WHEN_ACTIVE)
+        val reverted = store.configFlow.first()
+        assertEquals(com.example.model.FloatingBubbleBehavior.HIDE_WHEN_ACTIVE, reverted.bubbleBehavior)
+    }
 }

@@ -4,10 +4,14 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.os.Build
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import com.example.capture.ScreenMetricsHelper
 import com.example.model.AiProviderPreset
 import com.example.model.DisplayMode
+import com.example.model.FloatingBubbleBehavior
+import com.example.model.FloatingBubbleTheme
+import com.example.model.OverlayHubStage
 import com.example.model.RoiRect
 import com.example.model.SubtitleEntry
 import com.example.model.TranslationConfig
@@ -15,14 +19,18 @@ import com.example.model.TranslatorTelemetry
 import kotlin.math.roundToInt
 
 /**
- * Coordinates the ROI selector window (and its In-Place render layer), the floating HUD window
- * (resizable & persisted Classic Box OR compact In-Place floating circular button), the
- * floating Dialogue History popup, and the floating AI Model Picker popup.
+ * Coordinates the three live overlay layers:
+ * 1. ROI viewfinder + In-Place frosted Blur canvas ([RoiOverlayView]) — visible in ACTIVE_MODE
+ * 2. Active-mode HUD ([SubtitleHudOverlayView]) — Classic Box OR In-Place Blur corner "X" close button
+ * 3. Floating Control Bubble / Mode Picker / Half-Circle "<" Dock ([FloatingControlBubbleOverlayView])
+ * Plus modal popups ([DialogueHistoryOverlayView] and [ModelPickerOverlayView]).
  */
 class OverlayController(
     private val context: Context,
     private val onRoiChanged: (RoiRect) -> Unit,
     private val onClassicBoxLayoutChanged: (x: Int, y: Int, widthDp: Int, heightDp: Int) -> Unit,
+    private val onSelectTranslationMode: (DisplayMode) -> Unit,
+    private val onCloseActiveMode: () -> Unit,
     private val onToggleDisplayMode: () -> Unit,
     private val onToggleEngineMode: () -> Unit,
     private val onOpenModelPicker: () -> Unit,
@@ -44,17 +52,30 @@ class OverlayController(
     private var hudView: SubtitleHudOverlayView? = null
     private var hudParams: WindowManager.LayoutParams? = null
 
+    private var bubbleView: FloatingControlBubbleOverlayView? = null
+    private var bubbleParams: WindowManager.LayoutParams? = null
+
     private var historyView: DialogueHistoryOverlayView? = null
     private var modelPickerView: ModelPickerOverlayView? = null
 
     private var currentRoi: RoiRect = RoiRect.defaultForScreen(1080, 1920)
     private var currentDisplayMode: DisplayMode? = null
+    private var currentHubStage: OverlayHubStage = OverlayHubStage.BUBBLE_IDLE
+    private var currentBubbleBehavior: FloatingBubbleBehavior? = null
+    private var currentBubbleTheme: FloatingBubbleTheme? = null
+    private var lastBubblePresentation: FloatingControlBubbleOverlayView.VisualPresentation? = null
+
     private var appliedClassicWidthDp: Int = -1
     private var appliedClassicHeightDp: Int = -1
     private var desiredClassicHeightPx: Int = -1
     private var isResizingClassicBox: Boolean = false
     private var savedClassicX: Int = -1
     private var savedClassicY: Int = -1
+
+    private var savedBubbleX: Int = -1
+    private var savedBubbleY: Int = -1
+    private var savedDockY: Int = -1
+
     private var isShown = false
 
     private fun overlayWindowType(): Int {
@@ -75,6 +96,11 @@ class OverlayController(
         savedClassicX = initialConfig.classicBoxX
         savedClassicY = initialConfig.classicBoxY
 
+        savedBubbleX = (bounds.width - dp(74f)).coerceAtLeast(dp(12f))
+        savedBubbleY = (bounds.height * 0.44f).toInt().coerceIn(dp(48f), (bounds.height - dp(96f)).coerceAtLeast(dp(48f)))
+        savedDockY = (bounds.height * 0.74f).toInt().coerceIn(dp(64f), (bounds.height - dp(96f)).coerceAtLeast(dp(64f)))
+
+        // 1. ROI Overlay (initially GONE in BUBBLE_IDLE until user chooses a mode)
         val roiOverlay = RoiOverlayView(
             context = context,
             onDragDelta = { dx, dy -> moveRoiWindow(dx, dy) },
@@ -83,7 +109,9 @@ class OverlayController(
                 currentRoi = actualRect
                 onRoiChanged(actualRect)
             }
-        )
+        ).apply {
+            visibility = View.GONE
+        }
 
         val topBarOffset = roiOverlay.getTopBarHeightPx()
         val rParams = WindowManager.LayoutParams(
@@ -103,6 +131,7 @@ class OverlayController(
             }
         }
 
+        // 2. Active-Mode HUD Overlay (initially GONE in BUBBLE_IDLE)
         val hudOverlay = SubtitleHudOverlayView(
             context = context,
             onDragDelta = { dx, dy -> moveHudWindow(dx, dy) },
@@ -124,11 +153,10 @@ class OverlayController(
             onTogglePause = onTogglePause,
             onToggleLockRoi = onToggleLockRoi,
             onOpenHistory = onOpenHistory,
-            onOpenSettings = onOpenSettings,
-            onStopService = onStopService,
-            onMenuExpansionChanged = { syncHudWindowLayout(DisplayMode.IN_PLACE_BLUR) }
+            onCloseActiveMode = onCloseActiveMode
         ).apply {
             updateClassicBoxOpacity(initialConfig.classicBoxOpacity)
+            visibility = View.GONE
         }
 
         val classicW = clampClassicWidthPx(dp(initialConfig.classicBoxWidthDp.toFloat()), bounds.width)
@@ -163,13 +191,52 @@ class OverlayController(
             }
         }
 
+        // 3. Draggable Floating Control Bubble + Mode Menu + Half-Circle "<" Dock
+        val bubbleOverlay = FloatingControlBubbleOverlayView(
+            context = context,
+            onDragBubbleDelta = { dx, dy -> moveBubbleWindow(dx, dy) },
+            onDragBubbleFinished = { persistBubbleAnchor() },
+            onDragDockVerticalDelta = { dy -> moveDockVertically(dy) },
+            onDragDockFinished = { persistDockAnchor() },
+            onSelectTranslationMode = onSelectTranslationMode,
+            onCloseActiveMode = onCloseActiveMode,
+            onToggleEngineMode = onToggleEngineMode,
+            onOpenModelPicker = onOpenModelPicker,
+            onTogglePause = onTogglePause,
+            onToggleLockRoi = onToggleLockRoi,
+            onOpenHistory = onOpenHistory,
+            onOpenSettings = onOpenSettings,
+            onStopService = onStopService,
+            onLayoutRequirementChanged = { syncBubbleWindowLayout() }
+        )
+
+        val bParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            overlayWindowType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = savedBubbleX
+            y = savedBubbleY
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+
         windowManager.addView(roiOverlay, rParams)
         windowManager.addView(hudOverlay, hParams)
+        windowManager.addView(bubbleOverlay, bParams)
 
         roiView = roiOverlay
         roiParams = rParams
         hudView = hudOverlay
         hudParams = hParams
+        bubbleView = bubbleOverlay
+        bubbleParams = bParams
         isShown = true
     }
 
@@ -182,7 +249,8 @@ class OverlayController(
     }
 
     fun hasActiveInPlaceOverlay(): Boolean {
-        return roiView?.hasActiveInPlaceBlocks() == true
+        return currentHubStage == OverlayHubStage.ACTIVE_MODE &&
+            roiView?.hasActiveInPlaceBlocks() == true
     }
 
     fun getActiveMaskRectsInRoi(): Pair<List<RoiRect>, Int> {
@@ -326,8 +394,15 @@ class OverlayController(
     }
 
     fun updateHud(telemetry: TranslatorTelemetry, showOriginal: Boolean) {
+        val stageChanged = currentHubStage != telemetry.overlayHubStage
         val modeChanged = currentDisplayMode != telemetry.displayMode
+        val behaviorChanged = currentBubbleBehavior != telemetry.bubbleBehavior
+        val themeChanged = currentBubbleTheme != telemetry.bubbleTheme
+
+        currentHubStage = telemetry.overlayHubStage
         currentDisplayMode = telemetry.displayMode
+        currentBubbleBehavior = telemetry.bubbleBehavior
+        currentBubbleTheme = telemetry.bubbleTheme
 
         savedClassicX = telemetry.classicBoxX
         savedClassicY = telemetry.classicBoxY
@@ -337,21 +412,44 @@ class OverlayController(
         appliedClassicWidthDp = telemetry.classicBoxWidthDp
         appliedClassicHeightDp = telemetry.classicBoxHeightDp
 
-        hudView?.let {
-            it.updateClassicBoxOpacity(telemetry.classicBoxOpacity)
-            it.render(telemetry, showOriginal)
-        }
-        if (modeChanged || (telemetry.displayMode == DisplayMode.CLASSIC_BOX && classicSizeChanged)) {
-            syncHudWindowLayout(telemetry.displayMode)
-        }
+        val isActive = telemetry.overlayHubStage == OverlayHubStage.ACTIVE_MODE
+
+        // ROI & Blur visibility
         roiView?.let { roi ->
+            val targetRoiVis = if (isActive) View.VISIBLE else View.GONE
+            if (roi.visibility != targetRoiVis) {
+                roi.visibility = targetRoiVis
+            }
             val style = InPlaceRenderStyle.fromTelemetry(telemetry)
-            if (telemetry.displayMode == DisplayMode.IN_PLACE_BLUR) {
+            if (isActive && telemetry.displayMode == DisplayMode.IN_PLACE_BLUR) {
                 roi.updateInPlaceBlocks(telemetry.inPlaceBlocks, style)
             } else {
                 roi.updateInPlaceBlocks(emptyList(), style)
             }
         }
+
+        // Active-Mode HUD (Classic Box OR In-Place Blur corner "X" close button)
+        hudView?.let { hud ->
+            val targetHudVis = if (isActive) View.VISIBLE else View.GONE
+            if (hud.visibility != targetHudVis) {
+                hud.visibility = targetHudVis
+            }
+            hud.updateClassicBoxOpacity(telemetry.classicBoxOpacity)
+            hud.render(telemetry, showOriginal)
+        }
+        if (isActive && (stageChanged || modeChanged || (telemetry.displayMode == DisplayMode.CLASSIC_BOX && classicSizeChanged))) {
+            syncHudWindowLayout(telemetry.displayMode)
+        }
+
+        // Floating Control Bubble / Half-Circle Dock
+        bubbleView?.let { bubble ->
+            bubble.render(telemetry)
+            val presentationChanged = lastBubblePresentation != bubble.currentPresentation()
+            if (stageChanged || behaviorChanged || themeChanged || presentationChanged) {
+                syncBubbleWindowLayout()
+            }
+        }
+
         historyView?.renderEntries(telemetry.recentEntries, scrollToLatest = false)
         modelPickerView?.render(
             preset = telemetry.aiPreset,
@@ -361,6 +459,60 @@ class OverlayController(
         )
     }
 
+    private fun syncBubbleWindowLayout() {
+        val bubble = bubbleView ?: return
+        val params = bubbleParams ?: return
+        val bounds = ScreenMetricsHelper.getScreenBounds(context)
+        val presentation = bubble.currentPresentation()
+        lastBubblePresentation = presentation
+
+        params.width = WindowManager.LayoutParams.WRAP_CONTENT
+        params.height = WindowManager.LayoutParams.WRAP_CONTENT
+
+        when (presentation) {
+            FloatingControlBubbleOverlayView.VisualPresentation.BUBBLE_ONLY -> {
+                val bubbleW = dp(62f)
+                val bubbleH = dp(62f)
+                params.x = savedBubbleX.coerceIn(dp(6f), (bounds.width - bubbleW - dp(6f)).coerceAtLeast(dp(6f)))
+                params.y = savedBubbleY.coerceIn(dp(24f), (bounds.height - bubbleH - dp(16f)).coerceAtLeast(dp(24f)))
+            }
+
+            FloatingControlBubbleOverlayView.VisualPresentation.MENU_WITH_BUBBLE -> {
+                val menuApproxW = dp(312f)
+                val menuApproxH = dp(380f)
+                val anchorY = if (currentHubStage == OverlayHubStage.ACTIVE_MODE &&
+                    currentBubbleBehavior == FloatingBubbleBehavior.DOCK_HALF_CIRCLE
+                ) {
+                    savedDockY - menuApproxH + dp(66f)
+                } else {
+                    savedBubbleY - menuApproxH + dp(66f)
+                }
+                val anchorX = if (currentHubStage == OverlayHubStage.ACTIVE_MODE &&
+                    currentBubbleBehavior == FloatingBubbleBehavior.DOCK_HALF_CIRCLE
+                ) {
+                    bounds.width - menuApproxW - dp(8f)
+                } else {
+                    savedBubbleX - dp(244f)
+                }
+                params.x = anchorX.coerceIn(dp(6f), (bounds.width - menuApproxW - dp(6f)).coerceAtLeast(dp(6f)))
+                params.y = anchorY.coerceIn(dp(24f), (bounds.height - menuApproxH - dp(12f)).coerceAtLeast(dp(24f)))
+            }
+
+            FloatingControlBubbleOverlayView.VisualPresentation.HALF_CIRCLE_DOCK -> {
+                val dockW = dp(34f)
+                val dockH = dp(60f)
+                params.x = (bounds.width - dockW).coerceAtLeast(0)
+                params.y = savedDockY.coerceIn(dp(48f), (bounds.height - dockH - dp(24f)).coerceAtLeast(dp(48f)))
+            }
+
+            FloatingControlBubbleOverlayView.VisualPresentation.HIDDEN -> Unit
+        }
+
+        if (bubble.isAttachedToWindow) {
+            windowManager.updateViewLayout(bubble, params)
+        }
+    }
+
     private fun syncHudWindowLayout(mode: DisplayMode) {
         val view = hudView ?: return
         val params = hudParams ?: return
@@ -368,10 +520,19 @@ class OverlayController(
         if (mode == DisplayMode.IN_PLACE_BLUR) {
             params.width = WindowManager.LayoutParams.WRAP_CONTENT
             params.height = WindowManager.LayoutParams.WRAP_CONTENT
-            val fabEdgeMargin = dp(12f)
-            val approxWidth = if (view.isCornerMenuOpen()) dp(380f) else dp(52f)
-            params.x = (bounds.width - approxWidth - fabEdgeMargin).coerceAtLeast(fabEdgeMargin)
-            params.y = params.y.coerceIn(dp(36f), (bounds.height - dp(96f)).coerceAtLeast(dp(36f)))
+            val rParams = roiParams
+            val targetX = if (rParams != null) {
+                (rParams.x + rParams.width - dp(40f)).coerceIn(dp(8f), (bounds.width - dp(44f)).coerceAtLeast(dp(8f)))
+            } else {
+                (bounds.width - dp(54f)).coerceAtLeast(dp(8f))
+            }
+            val targetY = if (rParams != null) {
+                (rParams.y - dp(6f)).coerceIn(dp(16f), (bounds.height - dp(56f)).coerceAtLeast(dp(16f)))
+            } else {
+                dp(36f)
+            }
+            params.x = targetX
+            params.y = targetY
         } else {
             val targetW = clampClassicWidthPx(dp(appliedClassicWidthDp.coerceAtLeast(200).toFloat()), bounds.width)
             val requestedH = if (desiredClassicHeightPx > 0) desiredClassicHeightPx else dp(appliedClassicHeightDp.coerceAtLeast(84).toFloat())
@@ -395,7 +556,10 @@ class OverlayController(
     }
 
     private fun applyDynamicClassicHeight(requestedHeightPx: Int) {
-        if (currentDisplayMode != DisplayMode.CLASSIC_BOX || isResizingClassicBox) return
+        if (currentHubStage != OverlayHubStage.ACTIVE_MODE ||
+            currentDisplayMode != DisplayMode.CLASSIC_BOX ||
+            isResizingClassicBox
+        ) return
         val view = hudView ?: return
         val params = hudParams ?: return
         val bounds = ScreenMetricsHelper.getScreenBounds(context)
@@ -421,6 +585,9 @@ class OverlayController(
         if (view.isAttachedToWindow) {
             windowManager.updateViewLayout(view, params)
         }
+        if (currentDisplayMode == DisplayMode.IN_PLACE_BLUR) {
+            syncHudWindowLayout(DisplayMode.IN_PLACE_BLUR)
+        }
     }
 
     private fun resizeRoiWindow(dw: Int, dh: Int) {
@@ -434,6 +601,52 @@ class OverlayController(
         if (view.isAttachedToWindow) {
             windowManager.updateViewLayout(view, params)
         }
+        if (currentDisplayMode == DisplayMode.IN_PLACE_BLUR) {
+            syncHudWindowLayout(DisplayMode.IN_PLACE_BLUR)
+        }
+    }
+
+    private fun moveBubbleWindow(dx: Int, dy: Int) {
+        val bubble = bubbleView ?: return
+        val params = bubbleParams ?: return
+        val bounds = ScreenMetricsHelper.getScreenBounds(context)
+        val w = bubble.width.coerceAtLeast(dp(62f))
+        val h = bubble.height.coerceAtLeast(dp(62f))
+        params.x = (params.x + dx).coerceIn(0, (bounds.width - w).coerceAtLeast(0))
+        params.y = (params.y + dy).coerceIn(dp(16f), (bounds.height - h - dp(12f)).coerceAtLeast(dp(16f)))
+        if (bubble.currentPresentation() == FloatingControlBubbleOverlayView.VisualPresentation.BUBBLE_ONLY) {
+            savedBubbleX = params.x
+            savedBubbleY = params.y
+        }
+        if (bubble.isAttachedToWindow) {
+            windowManager.updateViewLayout(bubble, params)
+        }
+    }
+
+    private fun persistBubbleAnchor() {
+        val bubble = bubbleView ?: return
+        val params = bubbleParams ?: return
+        if (bubble.currentPresentation() == FloatingControlBubbleOverlayView.VisualPresentation.BUBBLE_ONLY) {
+            savedBubbleX = params.x
+            savedBubbleY = params.y
+        }
+    }
+
+    private fun moveDockVertically(dy: Int) {
+        val bubble = bubbleView ?: return
+        val params = bubbleParams ?: return
+        val bounds = ScreenMetricsHelper.getScreenBounds(context)
+        val dockH = dp(60f)
+        params.y = (params.y + dy).coerceIn(dp(48f), (bounds.height - dockH - dp(24f)).coerceAtLeast(dp(48f)))
+        savedDockY = params.y
+        if (bubble.isAttachedToWindow) {
+            windowManager.updateViewLayout(bubble, params)
+        }
+    }
+
+    private fun persistDockAnchor() {
+        val params = bubbleParams ?: return
+        savedDockY = params.y
     }
 
     private fun moveHudWindow(dx: Int, dy: Int) {
@@ -493,10 +706,15 @@ class OverlayController(
         hudView?.let {
             if (it.isAttachedToWindow) windowManager.removeViewImmediate(it)
         }
+        bubbleView?.let {
+            if (it.isAttachedToWindow) windowManager.removeViewImmediate(it)
+        }
         roiView = null
         roiParams = null
         hudView = null
         hudParams = null
+        bubbleView = null
+        bubbleParams = null
         isShown = false
     }
 

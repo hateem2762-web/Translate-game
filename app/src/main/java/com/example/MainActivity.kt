@@ -104,6 +104,8 @@ class MainActivity : ComponentActivity() {
                     onDownloadModelClick = { viewModel.downloadLanguageModels() },
                     onSelectDisplayMode = { viewModel.updateDisplayMode(it) },
                     onSelectEngineMode = { viewModel.updateEngineMode(it) },
+                    onBubbleBehaviorChange = { viewModel.updateBubbleBehavior(it) },
+                    onBubbleThemeChange = { viewModel.updateBubbleTheme(it) },
                     onFontSizeSpChange = { viewModel.updateFontSizeSp(it) },
                     onSubtitleTextColorChange = { viewModel.updateSubtitleTextColorArgb(it) },
                     onClassicTextFitModeChange = { viewModel.updateClassicTextFitMode(it) },

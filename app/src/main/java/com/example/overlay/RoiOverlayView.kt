@@ -129,28 +129,36 @@ class RoiOverlayView(
     }
 
     /**
-     * Hides the In-Place layer and waits for Android's Choreographer UI traversal
-     * so the invisible state is submitted to SurfaceFlinger, returning the monotonic
-     * timestamp recorded right when hiding began (so valid frames are never rejected).
+     * Hides the In-Place layer and waits past Android's UI traversal commit so the invisible
+     * surface buffer has already been submitted to SurfaceFlinger, then returns the current
+     * System.nanoTime() baseline for ScreenCaptureManager.
      */
     suspend fun awaitHiddenCommittedNs(): Long {
-        val hideRequestedNs = System.nanoTime()
         setInPlaceStealth(true)
-        withTimeoutOrNull(36L) {
+        var traversalMinNs = System.nanoTime()
+        withTimeoutOrNull(44L) {
             suspendCancellableCoroutine { cont ->
                 val choreographer = Choreographer.getInstance()
-                val frameCallback = Choreographer.FrameCallback {
-                    if (cont.isActive) {
-                        cont.resume(Unit)
+                var secondCallback: Choreographer.FrameCallback? = null
+                val firstCallback = Choreographer.FrameCallback {
+                    // Frame 1 CALLBACK_ANIMATION: traversal draws invisible layer ~1-3ms from now.
+                    traversalMinNs = System.nanoTime() + 3_000_000L
+                    val cb2 = Choreographer.FrameCallback {
+                        if (cont.isActive) {
+                            cont.resume(Unit)
+                        }
                     }
+                    secondCallback = cb2
+                    choreographer.postFrameCallback(cb2)
                 }
-                choreographer.postFrameCallback(frameCallback)
+                choreographer.postFrameCallback(firstCallback)
                 cont.invokeOnCancellation {
-                    choreographer.removeFrameCallback(frameCallback)
+                    choreographer.removeFrameCallback(firstCallback)
+                    secondCallback?.let { choreographer.removeFrameCallback(it) }
                 }
             }
         }
-        return hideRequestedNs + 2_000_000L
+        return traversalMinNs
     }
 
     /**

@@ -140,25 +140,24 @@ class ScreenCaptureManager(
     }
 
     /**
-     * Waits past SurfaceFlinger's hide-overlay composite after [minValidTimestampNs] and acquires
-     * ONLY a frame produced after the In-Place layer became invisible. Any older stale frame is
-     * discarded so our own Turkish overlay text never leaks into OCR.
+     * Waits past SurfaceFlinger's hide-overlay composite after [minValidTimestampNs] (measured on the
+     * same System.nanoTime() clock as OnImageAvailableListener) and acquires a clean frame.
+     * Falls back to latest available frame after settle if VirtualDisplay coalesced the frame.
      */
     suspend fun awaitAndCaptureStealthRoi(
         roi: RoiRect,
         minValidTimestampNs: Long = 0L,
-        settleMs: Long = 22L,
-        maxWaitMs: Long = 68L
+        settleMs: Long = 18L,
+        maxWaitMs: Long = 76L
     ): Bitmap? {
         delay(settleMs)
-        val deadlineMs = System.currentTimeMillis() + (maxWaitMs - settleMs).coerceAtLeast(16L)
+        val deadlineMs = System.currentTimeMillis() + (maxWaitMs - settleMs).coerceAtLeast(18L)
 
         while (true) {
             val reader = imageReader ?: return null
-            val image = reader.acquireLatestImage()
-            if (image != null) {
-                val ts = image.timestamp
-                if (minValidTimestampNs <= 0L || ts <= 0L || ts >= minValidTimestampNs) {
+            if (minValidTimestampNs <= 0L || lastImageTimestampNs >= minValidTimestampNs) {
+                val image = reader.acquireLatestImage()
+                if (image != null) {
                     nextFrameSignal = null
                     return try {
                         cropPlaneToBitmap(image, roi)
@@ -166,14 +165,18 @@ class ScreenCaptureManager(
                         image.close()
                     }
                 }
-                // Stale pre-hide frame containing our own overlay -> discard and wait for next VSync
-                image.close()
             }
 
             val remaining = deadlineMs - System.currentTimeMillis()
             if (remaining <= 0L) {
                 nextFrameSignal = null
-                return null
+                // Final post-settle acquire fallback so static screens never starve Blur OCR
+                val fallbackImg = reader.acquireLatestImage() ?: return null
+                return try {
+                    cropPlaneToBitmap(fallbackImg, roi)
+                } finally {
+                    fallbackImg.close()
+                }
             }
 
             val signal = CompletableDeferred<Unit>().also { nextFrameSignal = it }
