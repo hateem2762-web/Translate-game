@@ -705,7 +705,6 @@ fun SandboxTab(
                                             imageVector = when (mode) {
                                                 TranslationEngineMode.OFFLINE_LOCAL -> Icons.Rounded.OfflineBolt
                                                 TranslationEngineMode.SMART_AI -> Icons.Rounded.AutoAwesome
-                                                TranslationEngineMode.DEEPL -> Icons.Rounded.Translate
                                                 TranslationEngineMode.LIBRETRANSLATE -> Icons.Rounded.Translate
                                             },
                                             contentDescription = null,

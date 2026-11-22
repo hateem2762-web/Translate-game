@@ -418,50 +418,88 @@ class SubtitlePipelineTest {
     }
 
     @Test
-    fun `deepl provider resolves free vs pro endpoints, maps languages, and routes via pipeline`() = runTest {
-        assertFalse(com.example.engine.DeepLTranslationProvider.isValidKey(""))
-        assertFalse(
-            com.example.engine.DeepLTranslationProvider.isValidKey(
-                com.example.engine.DeepLTranslationProvider.DEFAULT_PLACEHOLDER
-            )
-        )
-        assertTrue(com.example.engine.DeepLTranslationProvider.isValidKey("abc123:fx"))
+    fun `libretranslate provider resolves endpoints, maps languages, and routes via pipeline`() = runTest {
+        assertEquals(null, com.example.engine.LibreTranslateProvider.resolveEndpoint("   "))
         assertEquals(
-            "https://api-free.deepl.com/v2/translate",
-            com.example.engine.DeepLTranslationProvider.resolveEndpoint("abc123:fx")
+            "https://libretranslate.com/translate",
+            com.example.engine.LibreTranslateProvider.resolveEndpoint("libretranslate.com")
         )
         assertEquals(
-            "https://api.deepl.com/v2/translate",
-            com.example.engine.DeepLTranslationProvider.resolveEndpoint("abc123-pro-key")
+            "https://libretranslate.com/translate",
+            com.example.engine.LibreTranslateProvider.resolveEndpoint("https://libretranslate.com/")
+        )
+        assertEquals(
+            "http://192.168.1.50:5000/translate",
+            com.example.engine.LibreTranslateProvider.resolveEndpoint("http://192.168.1.50:5000/")
         )
 
-        assertEquals("EN", com.example.engine.DeepLTranslationProvider.mapSourceLang(TranslateLanguage.ENGLISH))
-        assertEquals("EN-US", com.example.engine.DeepLTranslationProvider.mapTargetLang(TranslateLanguage.ENGLISH))
-        assertEquals("ZH", com.example.engine.DeepLTranslationProvider.mapSourceLang(TranslateLanguage.CHINESE))
-        assertEquals("TR", com.example.engine.DeepLTranslationProvider.mapTargetLang(TranslateLanguage.TURKISH))
-        assertEquals("PT-PT", com.example.engine.DeepLTranslationProvider.mapTargetLang(TranslateLanguage.PORTUGUESE))
+        assertEquals("en", com.example.engine.LibreTranslateProvider.mapLangCode(TranslateLanguage.ENGLISH))
+        assertEquals("zh", com.example.engine.LibreTranslateProvider.mapLangCode(TranslateLanguage.CHINESE))
+        assertEquals("tr", com.example.engine.LibreTranslateProvider.mapLangCode(TranslateLanguage.TURKISH))
+        assertEquals("pt", com.example.engine.LibreTranslateProvider.mapLangCode(TranslateLanguage.PORTUGUESE))
 
-        val deeplFake = FakeProvider(TranslationEngineMode.DEEPL, "DL")
+        val libreFake = FakeProvider(TranslationEngineMode.LIBRETRANSLATE, "LT")
         val offline = FakeProvider(TranslationEngineMode.OFFLINE_LOCAL, "LOC")
         val pipeline = SubtitlePipeline(
             scope = this,
             ocrEngine = FakeOcrEngine(),
             providers = mapOf(
                 TranslationEngineMode.OFFLINE_LOCAL to offline,
-                TranslationEngineMode.DEEPL to deeplFake
+                TranslationEngineMode.LIBRETRANSLATE to libreFake
             ),
             cacheStore = InMemoryCacheStore()
         )
-        val deeplConfig = TranslationConfig(
+        val libreConfig = TranslationConfig(
             debounceMs = 150L,
-            engineMode = TranslationEngineMode.DEEPL
+            engineMode = TranslationEngineMode.LIBRETRANSLATE
         )
-        pipeline.processRecognizedResult(simpleResult("Defeat the boss"), null, deeplConfig)
+        pipeline.processRecognizedResult(simpleResult("Defeat the boss"), null, libreConfig)
         advanceTimeBy(150L)
         runCurrent()
 
-        assertEquals(1, deeplFake.translateCalls)
+        assertEquals(1, libreFake.translateCalls)
         assertEquals(0, offline.translateCalls)
-        assertEquals("DL:Defeat the boss", pipeline.output.value.translatedText)
+        assertEquals("LT:Defeat the boss", pipeline.output.value.translatedText)
+    }
+
+    @Test
+    fun `fuzzy cache serves 92pct similar dialogue after blank frames without extra AI quota call`() = runTest {
+        val ai = FakeProvider(TranslationEngineMode.SMART_AI, "AI")
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(TranslationEngineMode.SMART_AI to ai),
+            cacheStore = InMemoryCacheStore()
+        )
+        val aiConfig = TranslationConfig(
+            debounceMs = 200L,
+            engineMode = TranslationEngineMode.SMART_AI
+        )
+
+        pipeline.processRecognizedResult(
+            simpleResult("The ancient dragon awakens in the dark cavern"),
+            null,
+            aiConfig
+        )
+        advanceTimeBy(200L)
+        runCurrent()
+        assertEquals(1, ai.translateCalls)
+
+        // Blank out dialogue so lastTranslatedSource resets
+        pipeline.processRecognizedResult(simpleResult(""), null, aiConfig)
+        pipeline.processRecognizedResult(simpleResult(""), null, aiConfig)
+
+        // Re-appear with minor 1-char OCR misread ("cavern" -> "cavern." / "caveru") -> hits 92%+ fuzzy cache!
+        pipeline.processRecognizedResult(
+            simpleResult("The ancient dragon awakens in the dark caveru"),
+            null,
+            aiConfig
+        )
+        advanceTimeBy(200L)
+        runCurrent()
+
+        assertEquals(1, ai.translateCalls)
+        assertTrue(pipeline.output.value.fromCache)
+        assertEquals("AI:The ancient dragon awakens in the dark cavern", pipeline.output.value.translatedText)
     }
 }

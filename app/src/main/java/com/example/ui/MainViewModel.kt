@@ -16,7 +16,6 @@ import com.example.data.repository.TranslationCacheRepository
 import com.example.engine.BlurMaskHelper
 import com.example.engine.BlurredPatchResult
 import com.example.engine.BoundingBoxStabilizer
-import com.example.engine.DeepLTranslationProvider
 import com.example.engine.LibreTranslateProvider
 import com.example.engine.MlKitOcrEngine
 import com.example.engine.MlKitTranslatorEngine
@@ -96,9 +95,7 @@ data class MainUiState(
     val cacheCount: Int = 0,
     val telemetry: TranslatorTelemetry = TranslatorTelemetry(),
     val aiTestState: AiTestState = AiTestState.Idle,
-    val sandboxState: SandboxState = SandboxState(),
-    val isDeepLConfigured: Boolean = DeepLTranslationProvider.isApiKeyConfigured(),
-    val isDeepLFreeTier: Boolean = DeepLTranslationProvider.isFreeTierKey()
+    val sandboxState: SandboxState = SandboxState()
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -111,7 +108,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val translatorEngine = MlKitTranslatorEngine()
     private val offlineTranslator = OfflineMlKitTranslationProvider(translatorEngine)
     private val smartAiTester = SmartAiTranslationProvider(appContext)
-    private val deeplTranslator = DeepLTranslationProvider()
     private val libreTranslator = LibreTranslateProvider()
     private val sandboxOcrEngine = MlKitOcrEngine()
 
@@ -365,7 +361,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val sample = "Hello hero, ready for battle?"
                 val translated = when (currentConfig.engineMode) {
-                    TranslationEngineMode.DEEPL -> deeplTranslator.testConnection(sample, currentConfig)
                     TranslationEngineMode.LIBRETRANSLATE -> libreTranslator.testConnection(sample, currentConfig)
                     else -> smartAiTester.testConnection(sample, currentConfig)
                 }
@@ -431,7 +426,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val provider = when (effectiveConfig.engineMode) {
                     TranslationEngineMode.SMART_AI -> smartAiTester
-                    TranslationEngineMode.DEEPL -> deeplTranslator
                     TranslationEngineMode.LIBRETRANSLATE -> libreTranslator
                     TranslationEngineMode.OFFLINE_LOCAL -> offlineTranslator
                 }
@@ -546,7 +540,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sandboxOcrEngine.close()
         translatorEngine.close()
         smartAiTester.close()
-        deeplTranslator.close()
         libreTranslator.close()
         super.onCleared()
     }

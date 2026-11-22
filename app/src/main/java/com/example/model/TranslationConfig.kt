@@ -10,7 +10,6 @@ enum class DisplayMode(val shortLabelTr: String) {
 enum class TranslationEngineMode(val shortLabelTr: String) {
     OFFLINE_LOCAL("Yerel"),
     SMART_AI("AI"),
-    DEEPL("DeepL"),
     LIBRETRANSLATE("Libre")
 }
 

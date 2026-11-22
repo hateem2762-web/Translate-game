@@ -543,10 +543,10 @@ private fun LaunchControlCard(
                 uiState.config.aiApiKey.isBlank()
             ) {
                 WarningBanner("Özel uç nokta seçili: Aşağıdaki Motor kartından API anahtarı girin.")
-            } else if (uiState.config.engineMode == TranslationEngineMode.DEEPL &&
-                !uiState.isDeepLConfigured
+            } else if (uiState.config.engineMode == TranslationEngineMode.LIBRETRANSLATE &&
+                uiState.config.libreEndpointUrl.isBlank()
             ) {
-                WarningBanner("DeepL seçili: AI Studio Secrets panelinden DEEPL_API_KEY değerini ekleyin.")
+                WarningBanner("LibreTranslate seçili: Aşağıdaki Motor kartından sunucu adresini girin.")
             }
 
             uiState.telemetry.errorMessage?.takeIf { it.isNotBlank() }?.let { errMsg ->
@@ -906,7 +906,6 @@ private fun DisplayAndEngineModeCard(
                                     imageVector = when (mode) {
                                         TranslationEngineMode.OFFLINE_LOCAL -> Icons.Rounded.OfflineBolt
                                         TranslationEngineMode.SMART_AI -> Icons.Rounded.AutoAwesome
-                                        TranslationEngineMode.DEEPL -> Icons.Rounded.Translate
                                         TranslationEngineMode.LIBRETRANSLATE -> Icons.Rounded.Translate
                                     },
                                     contentDescription = null,
@@ -919,13 +918,11 @@ private fun DisplayAndEngineModeCard(
                             colors = SegmentedButtonDefaults.colors(
                                 activeContainerColor = when (mode) {
                                     TranslationEngineMode.SMART_AI -> AmberTertiary.copy(alpha = 0.22f)
-                                    TranslationEngineMode.DEEPL -> Color(0xFF38BDF8).copy(alpha = 0.22f)
                                     TranslationEngineMode.LIBRETRANSLATE -> Color(0xFF34D399).copy(alpha = 0.22f)
                                     TranslationEngineMode.OFFLINE_LOCAL -> CyanContainer
                                 },
                                 activeContentColor = when (mode) {
                                     TranslationEngineMode.SMART_AI -> AmberTertiary
-                                    TranslationEngineMode.DEEPL -> Color(0xFF38BDF8)
                                     TranslationEngineMode.LIBRETRANSLATE -> Color(0xFF34D399)
                                     TranslationEngineMode.OFFLINE_LOCAL -> CyanPrimary
                                 },
@@ -937,7 +934,6 @@ private fun DisplayAndEngineModeCard(
                                 text = when (mode) {
                                     TranslationEngineMode.OFFLINE_LOCAL -> stringResource(R.string.engine_mode_offline)
                                     TranslationEngineMode.SMART_AI -> stringResource(R.string.engine_mode_ai)
-                                    TranslationEngineMode.DEEPL -> stringResource(R.string.engine_mode_deepl)
                                     TranslationEngineMode.LIBRETRANSLATE -> stringResource(R.string.engine_mode_libre)
                                 },
                                 maxLines = 1,
@@ -950,9 +946,7 @@ private fun DisplayAndEngineModeCard(
                 Text(
                     text = when (uiState.config.engineMode) {
                         TranslationEngineMode.SMART_AI ->
-                            "Bağlam duyarlı LLM çevirisi (önbellek + sabitleme ile minimum kota tüketimi)."
-                        TranslationEngineMode.DEEPL ->
-                            "Yüksek doğruluklu DeepL sinirsel makine çevirisi (toplu satır ve önbellek desteği)."
+                            "Bağlam duyarlı LLM çevirisi (2.4 sn kota koruma aralığı + benzerlik önbelleği ile düşük kota tüketimi)."
                         TranslationEngineMode.LIBRETRANSLATE ->
                             "Açık kaynak LibreTranslate (kendi sunucunuz veya herhangi bir örnek). Toplu satır ve önbellek desteği."
                         TranslationEngineMode.OFFLINE_LOCAL ->
@@ -1026,11 +1020,11 @@ private fun DisplayAndEngineModeCard(
                     if (isGeminiPreset) {
                         val hasGeminiKey = aiApiKeyDraft.isNotBlank()
                         val activeModelHint = if (hasGeminiKey) {
-                            "Gemini API anahtarı ile doğrudan bağlanılıyor (google-services.json / Firebase gerekmez)."
+                            "Gemini API anahtarı ile doğrudan bağlanılıyor. Kota koruma: 2.4 sn istek aralığı + noktalama filtresi + %92 benzerlik önbelleği aktif."
                         } else {
-                            "Anahtar girilmezse Firebase AI Logic denenir (google-services.json gerekir). Firebase olmadan çalışması için aşağıya ücretsiz Gemini API anahtarınızı yapıştırın (aistudio.google.com/apikey)."
+                            "Firebase AI Logic hazır (google-services.json yapılandırıldı). Kota koruma: 2.4 sn istek aralığı + %92 benzerlik önbelleği aktif; daha yüksek limit için Flash-Lite seçebilirsiniz."
                         }
-                        val hintColor = if (hasGeminiKey) EmeraldSuccess else AmberTertiary
+                        val hintColor = EmeraldSuccess
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = hintColor.copy(alpha = 0.12f),
@@ -1191,168 +1185,6 @@ private fun DisplayAndEngineModeCard(
                                                 .fillMaxWidth()
                                                 .height(48.dp)
                                                 .testTag("switch_to_offline_from_quota"),
-                                            shape = RoundedCornerShape(10.dp),
-                                            border = BorderStroke(1.dp, CyanPrimary)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.OfflineBolt,
-                                                contentDescription = null,
-                                                tint = CyanPrimary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "Hızlı Yerel Moda Geç (Kotasız)",
-                                                color = CyanPrimary
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        else -> Unit
-                    }
-                }
-            }
-
-            AnimatedVisibility(visible = uiState.config.engineMode == TranslationEngineMode.DEEPL) {
-                Column(
-                    modifier = Modifier.padding(top = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    HorizontalDivider(color = ObsidianOutline)
-                    val deeplAccent = Color(0xFF38BDF8)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "DeepL Çeviri Ayarları",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = deeplAccent
-                        )
-                        if (uiState.isDeepLConfigured) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Rounded.CheckCircle,
-                                    contentDescription = null,
-                                    tint = EmeraldSuccess,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = if (uiState.isDeepLFreeTier) "Free API (:fx) Hazır" else "Pro API Hazır",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = EmeraldSuccess
-                                )
-                            }
-                        }
-                    }
-
-                    if (uiState.isDeepLConfigured) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = EmeraldSuccess.copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.35f))
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.CheckCircle,
-                                    contentDescription = null,
-                                    tint = EmeraldSuccess,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (uiState.isDeepLFreeTier) {
-                                        "DEEPL_API_KEY aktif (api-free.deepl.com otomatik seçildi). Çok satırlı sahneler tek istekte çevrilir."
-                                    } else {
-                                        "DEEPL_API_KEY aktif (api.deepl.com Pro otomatik seçildi). Çok satırlı sahneler tek istekte çevrilir."
-                                    },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = EmeraldSuccess
-                                )
-                            }
-                        }
-                    } else {
-                        WarningBanner(
-                            "DEEPL_API_KEY henüz yapılandırılmadı. AI Studio Secrets panelinden DEEPL_API_KEY değerini ekleyin (:fx ile biten ücretsiz veya Pro anahtar otomatik tanınır)."
-                        )
-                    }
-
-                    Button(
-                        onClick = onTestAiConnectionClick,
-                        enabled = uiState.isDeepLConfigured && uiState.aiTestState !is AiTestState.Testing,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("test_deepl_connection_button"),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = deeplAccent,
-                            contentColor = Color(0xFF04131E)
-                        )
-                    ) {
-                        if (uiState.aiTestState is AiTestState.Testing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = Color(0xFF04131E)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("DeepL Test Ediliyor…", style = MaterialTheme.typography.labelLarge)
-                        } else {
-                            Text("DeepL Bağlantısını Test Et", style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
-
-                    when (val test = uiState.aiTestState) {
-                        is AiTestState.Success -> {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = EmeraldSuccess.copy(alpha = 0.14f),
-                                border = BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.4f))
-                            ) {
-                                Text(
-                                    text = "DeepL Test Başarılı: \"${test.sampleOutput}\"",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = EmeraldSuccess,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(10.dp)
-                                )
-                            }
-                        }
-                        is AiTestState.Error -> {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.errorContainer,
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Text(
-                                        text = test.message,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onErrorContainer
-                                    )
-                                    if (test.isQuotaError) {
-                                        OutlinedButton(
-                                            onClick = { onSelectEngineMode(TranslationEngineMode.OFFLINE_LOCAL) },
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(48.dp)
-                                                .testTag("switch_to_offline_from_deepl_quota"),
                                             shape = RoundedCornerShape(10.dp),
                                             border = BorderStroke(1.dp, CyanPrimary)
                                         ) {
@@ -2017,7 +1849,7 @@ private fun EmptyHistoryCard() {
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "Çeviriyi başlattıktan sonra camgöbeği ROI çerçevesini oyunun diyalog alanına sürükleyip boyutlandırın. Yüzen kontrol panelinden Kutu/Doğal ve Yerel/AI/DeepL arasında anlık geçiş yapabilirsiniz.",
+                text = "Çeviriyi başlattıktan sonra camgöbeği ROI çerçevesini oyunun diyalog alanına sürükleyip boyutlandırın. Yüzen kontrol panelinden Kutu/Doğal ve Yerel/AI/Libre arasında anlık geçiş yapabilirsiniz.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -2046,14 +1878,12 @@ private fun SubtitleHistoryCard(entry: SubtitleEntry) {
                 val badgeText = when {
                     entry.fromCache -> "ÖNBELLEK (${entry.engineMode.shortLabelTr})"
                     entry.engineMode == TranslationEngineMode.SMART_AI -> "AKILLI AI"
-                    entry.engineMode == TranslationEngineMode.DEEPL -> "DEEPL"
                     entry.engineMode == TranslationEngineMode.LIBRETRANSLATE -> "LIBRETRANSLATE"
                     else -> "HIZLI YEREL"
                 }
                 val badgeColor = when {
                     entry.fromCache -> EmeraldSuccess
                     entry.engineMode == TranslationEngineMode.SMART_AI -> AmberTertiary
-                    entry.engineMode == TranslationEngineMode.DEEPL -> Color(0xFF38BDF8)
                     entry.engineMode == TranslationEngineMode.LIBRETRANSLATE -> Color(0xFF34D399)
                     else -> CyanPrimary
                 }

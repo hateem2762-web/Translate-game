@@ -502,7 +502,7 @@ class SmartAiTranslationProvider(
     }
 
     companion object {
-        private const val QUOTA_COOLDOWN_MS = 20_000L
+        private const val QUOTA_COOLDOWN_MS = 45_000L
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 }

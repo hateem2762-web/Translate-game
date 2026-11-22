@@ -54,6 +54,11 @@ class SubtitlePipeline(
     private var debounceJob: Job? = null
     private val boxStabilizer = BoundingBoxStabilizer()
 
+    // Quota protection: keep a compact fuzzy cache & pace uncached SMART_AI network calls
+    private val recentFuzzyCache = ArrayDeque<Pair<String, String>>(25)
+    private var lastFuzzyCacheNamespace: String = ""
+    private var lastCloudCallElapsedMs: Long = 0L
+
     fun reset() {
         debounceJob?.cancel()
         debounceJob = null
@@ -161,11 +166,14 @@ class SubtitlePipeline(
             return
         }
 
-        // Exact match OR single-character OCR flicker when text hasn't genuinely changed -> lock everything
+        // Exact match OR minor OCR/punctuation flicker when text hasn't genuinely changed -> lock everything
+        val cleanCur = stripMinorPunctuation(normalized)
+        val cleanPrev = stripMinorPunctuation(lastTranslatedSource)
         val isUnchangedOrMinorFlicker = normalized == lastTranslatedSource ||
-            (lastTranslatedSource.length >= 6 &&
-                normalized.length >= 6 &&
-                BoundingBoxStabilizer.textSimilarity(normalized, lastTranslatedSource) >= 0.88f)
+            (cleanCur.isNotEmpty() && cleanCur == cleanPrev) ||
+            (cleanPrev.length >= 5 &&
+                cleanCur.length >= 5 &&
+                BoundingBoxStabilizer.textSimilarity(cleanCur, cleanPrev) >= 0.82f)
         if (isUnchangedOrMinorFlicker) {
             _output.value = current.copy(
                 framesProcessed = current.framesProcessed + 1,
@@ -255,6 +263,7 @@ class SubtitlePipeline(
 
                 if (uncachedIndices.isNotEmpty()) {
                     anyNetworkOrModelCall = true
+                    paceSmartAiIfNeeded(config.engineMode)
                     val toTranslate = uncachedIndices.map { normalizedBlocks[it] }
                     val translatedBatch = if (toTranslate.size == 1) {
                         listOf(provider.translate(toTranslate.first(), config).trim())
@@ -296,17 +305,19 @@ class SubtitlePipeline(
                 inPlaceResultBlocks = translatedBlocks
                 combinedTranslated = translatedBlocks.joinToString("\n") { it.translatedText }.trim()
             } else {
-                val cached = cacheStore.get(
+                val exactCached = cacheStore.get(
                     engineMode = config.engineMode,
                     sourceLang = config.sourceLangCode,
                     targetLang = config.targetLangCode,
                     normalizedSource = sourceText
                 )
+                val cached = exactCached ?: findFuzzyCachedTranslation(sourceText, config)
                 if (cached != null) {
                     anyCacheHit = true
                     combinedTranslated = cached
                 } else {
                     anyNetworkOrModelCall = true
+                    paceSmartAiIfNeeded(config.engineMode)
                     combinedTranslated = provider.translate(sourceText, config).trim()
                     if (combinedTranslated.isNotBlank()) {
                         cacheStore.put(
@@ -316,6 +327,7 @@ class SubtitlePipeline(
                             normalizedSource = sourceText,
                             translated = combinedTranslated
                         )
+                        recordFuzzyCache(sourceText, combinedTranslated, config)
                     }
                 }
 
@@ -371,6 +383,9 @@ class SubtitlePipeline(
                 errorMessage = null,
                 lastCompletedEntry = entry
             )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            recyclePendingSnapshot()
+            throw e
         } catch (e: Exception) {
             recyclePendingSnapshot()
             _output.value = _output.value.copy(
@@ -378,6 +393,18 @@ class SubtitlePipeline(
                 errorMessage = e.localizedMessage ?: "Çeviri başarısız."
             )
         }
+    }
+
+    private suspend fun paceSmartAiIfNeeded(engineMode: TranslationEngineMode) {
+        if (engineMode != TranslationEngineMode.SMART_AI) return
+        val now = System.currentTimeMillis()
+        if (lastCloudCallElapsedMs > 0L) {
+            val remaining = AI_MIN_REQUEST_INTERVAL_MS - (now - lastCloudCallElapsedMs)
+            if (remaining in 1L..AI_MIN_REQUEST_INTERVAL_MS) {
+                delay(remaining)
+            }
+        }
+        lastCloudCallElapsedMs = System.currentTimeMillis()
     }
 
     private fun isSelfGeneratedOverlayText(normalizedOcr: String): Boolean {
@@ -426,8 +453,51 @@ class SubtitlePipeline(
         pendingSnapshot = null
     }
 
+    private fun stripMinorPunctuation(input: String): String {
+        return input.replace(MINOR_PUNCT_REGEX, "").trim()
+    }
+
+    private fun cacheNamespace(config: TranslationConfig): String {
+        return "${config.engineMode.name}:${config.sourceLangCode}->${config.targetLangCode}"
+    }
+
+    private fun findFuzzyCachedTranslation(sourceText: String, config: TranslationConfig): String? {
+        val ns = cacheNamespace(config)
+        if (ns != lastFuzzyCacheNamespace) {
+            recentFuzzyCache.clear()
+            lastFuzzyCacheNamespace = ns
+            return null
+        }
+        val cleanSource = stripMinorPunctuation(sourceText)
+        if (cleanSource.length < 8) return null
+        for ((cachedSource, cachedTranslated) in recentFuzzyCache.asReversed()) {
+            val cleanCached = stripMinorPunctuation(cachedSource)
+            if (cleanCached == cleanSource ||
+                (cleanCached.length >= 8 &&
+                    BoundingBoxStabilizer.textSimilarity(cleanSource, cleanCached) >= 0.92f)
+            ) {
+                return cachedTranslated
+            }
+        }
+        return null
+    }
+
+    private fun recordFuzzyCache(sourceText: String, translated: String, config: TranslationConfig) {
+        val ns = cacheNamespace(config)
+        if (ns != lastFuzzyCacheNamespace) {
+            recentFuzzyCache.clear()
+            lastFuzzyCacheNamespace = ns
+        }
+        recentFuzzyCache.addLast(sourceText to translated)
+        while (recentFuzzyCache.size > 25) {
+            recentFuzzyCache.removeFirst()
+        }
+    }
+
     companion object {
+        private const val AI_MIN_REQUEST_INTERVAL_MS = 2_400L
         private val MULTI_WHITESPACE = Regex("\\s+")
+        private val MINOR_PUNCT_REGEX = Regex("[.,!?;:'\"`~•·]+")
         private val CJK_INNER_SPACE = Regex("(?<=[\\u4E00-\\u9FFF\\u3000-\\u303F\\uFF00-\\uFFEF])\\s+(?=[\\u4E00-\\u9FFF\\u3000-\\u303F\\uFF00-\\uFFEF])")
 
         fun normalizeText(input: String, isChinese: Boolean = false): String {

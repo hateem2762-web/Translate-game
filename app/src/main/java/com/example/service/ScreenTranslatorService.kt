@@ -22,7 +22,6 @@ import com.example.capture.ScreenMetricsHelper
 import com.example.data.local.SubLensDatabase
 import com.example.data.preferences.SettingsDataStore
 import com.example.data.repository.TranslationCacheRepository
-import com.example.engine.DeepLTranslationProvider
 import com.example.engine.LibreTranslateProvider
 import com.example.engine.MlKitOcrEngine
 import com.example.engine.MlKitTranslatorEngine
@@ -54,7 +53,6 @@ class ScreenTranslatorService : Service() {
     private lateinit var ocrEngine: MlKitOcrEngine
     private lateinit var offlineProvider: OfflineMlKitTranslationProvider
     private lateinit var smartAiProvider: SmartAiTranslationProvider
-    private lateinit var deeplProvider: DeepLTranslationProvider
     private lateinit var libreProvider: LibreTranslateProvider
     private lateinit var pipeline: SubtitlePipeline
     private lateinit var captureManager: ScreenCaptureManager
@@ -74,7 +72,6 @@ class ScreenTranslatorService : Service() {
         ocrEngine = MlKitOcrEngine()
         offlineProvider = OfflineMlKitTranslationProvider(MlKitTranslatorEngine())
         smartAiProvider = SmartAiTranslationProvider(applicationContext)
-        deeplProvider = DeepLTranslationProvider()
         libreProvider = LibreTranslateProvider()
 
         pipeline = SubtitlePipeline(
@@ -83,7 +80,6 @@ class ScreenTranslatorService : Service() {
             providers = mapOf(
                 TranslationEngineMode.OFFLINE_LOCAL to offlineProvider,
                 TranslationEngineMode.SMART_AI to smartAiProvider,
-                TranslationEngineMode.DEEPL to deeplProvider,
                 TranslationEngineMode.LIBRETRANSLATE to libreProvider
             ),
             cacheStore = cacheRepository
@@ -477,7 +473,6 @@ class ScreenTranslatorService : Service() {
         ocrEngine.close()
         offlineProvider.close()
         smartAiProvider.close()
-        deeplProvider.close()
         libreProvider.close()
         ServiceStateHolder.markStopped()
         serviceScope.cancel()

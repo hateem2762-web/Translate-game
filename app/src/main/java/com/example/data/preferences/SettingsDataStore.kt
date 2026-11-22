@@ -71,9 +71,12 @@ class SettingsDataStore(private val context: Context) {
             DisplayMode.valueOf(prefs[Keys.DISPLAY_MODE] ?: DisplayMode.CLASSIC_BOX.name)
         }.getOrDefault(DisplayMode.CLASSIC_BOX)
 
-        val engineMode = runCatching {
-            TranslationEngineMode.valueOf(prefs[Keys.ENGINE_MODE] ?: TranslationEngineMode.OFFLINE_LOCAL.name)
-        }.getOrDefault(TranslationEngineMode.OFFLINE_LOCAL)
+        val savedEngine = prefs[Keys.ENGINE_MODE] ?: TranslationEngineMode.OFFLINE_LOCAL.name
+        val engineMode = when (savedEngine) {
+            "DEEPL", "LIBRE_TRANSLATE" -> TranslationEngineMode.LIBRETRANSLATE
+            else -> runCatching { TranslationEngineMode.valueOf(savedEngine) }
+                .getOrDefault(TranslationEngineMode.OFFLINE_LOCAL)
+        }
 
         val migratedLegacySp = when (prefs[Keys.LEGACY_FONT_SIZE]) {
             "SMALL" -> 14f
