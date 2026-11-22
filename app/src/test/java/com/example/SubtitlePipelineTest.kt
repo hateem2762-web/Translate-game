@@ -209,7 +209,7 @@ class SubtitlePipelineTest {
             fullText = "Open the gate\nFind the key",
             blocks = listOf(
                 OcrBlock("Open the gate", RoiRect(10, 10, 200, 30)),
-                OcrBlock("Find the key", RoiRect(10, 50, 200, 30))
+                OcrBlock("Find the key", RoiRect(10, 100, 200, 30))
             )
         )
 
@@ -229,6 +229,39 @@ class SubtitlePipelineTest {
         runCurrent()
         assertEquals(1, ai.batchCalls)
         assertTrue(pipeline.output.value.fromCache)
+    }
+
+    @Test
+    fun `in place mode merges stacked multi-line dialogue into one coherent paragraph block`() = runTest {
+        val ai = FakeProvider(TranslationEngineMode.SMART_AI, "TR")
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(TranslationEngineMode.SMART_AI to ai),
+            cacheStore = InMemoryCacheStore()
+        )
+        val config = TranslationConfig(
+            debounceMs = 200L,
+            displayMode = DisplayMode.IN_PLACE_BLUR,
+            engineMode = TranslationEngineMode.SMART_AI
+        )
+
+        val stackedDialogue = OcrResult(
+            fullText = "Open the gate\nbefore it closes",
+            blocks = listOf(
+                OcrBlock("Open the gate", RoiRect(10, 10, 220, 30)),
+                OcrBlock("before it closes", RoiRect(10, 48, 220, 30))
+            )
+        )
+
+        pipeline.processRecognizedResult(stackedDialogue, null, config)
+        advanceTimeBy(200L)
+        runCurrent()
+
+        assertEquals(1, ai.translateCalls)
+        assertEquals(0, ai.batchCalls)
+        assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+        assertEquals("TR:Open the gate before it closes", pipeline.output.value.translatedText)
     }
 
     @Test
@@ -315,7 +348,7 @@ class SubtitlePipelineTest {
     }
 
     @Test
-    fun `in place blur keeps subtitle visible during 1 transient blank frame and clears after 2nd blank`() = runTest {
+    fun `in place blur keeps subtitle visible during 2 transient blank frames and clears after 3rd blank`() = runTest {
         val ai = FakeProvider(TranslationEngineMode.SMART_AI, "TR")
         val pipeline = SubtitlePipeline(
             scope = this,
@@ -334,12 +367,16 @@ class SubtitlePipelineTest {
         runCurrent()
         assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
 
-        // 1st transient blank frame must NOT clear the active In-Place Blur overlay (prevents single-frame flicker)
+        // 1st and 2nd transient blank frames must NOT clear the active In-Place Blur overlay
         pipeline.processRecognizedResult(simpleResult(""), null, config)
         assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
         assertTrue(pipeline.isAwaitingBlankClear())
 
-        // 2nd consecutive blank frame clears cleanly when dialogue actually ends
+        pipeline.processRecognizedResult(simpleResult(""), null, config)
+        assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+        assertTrue(pipeline.isAwaitingBlankClear())
+
+        // 3rd consecutive blank frame clears cleanly when dialogue actually ends
         pipeline.processRecognizedResult(simpleResult(""), null, config)
         assertEquals(0, pipeline.output.value.inPlaceBlocks.size)
         assertFalse(pipeline.isAwaitingBlankClear())
@@ -738,7 +775,9 @@ class SubtitlePipelineTest {
         assertEquals(1, ai.calls)
         assertEquals(1L, pipeline.output.value.framesSkipped)
 
-        // Blank frames trigger awaiting-clear state and wipe sourceText + translatedText + inPlaceBlocks at threshold 2
+        // Blank frames trigger awaiting-clear state and wipe sourceText + translatedText + inPlaceBlocks at threshold 3
+        pipeline.processRecognizedResult(simpleResult(""), null, config)
+        assertTrue(pipeline.isAwaitingBlankClear())
         pipeline.processRecognizedResult(simpleResult(""), null, config)
         assertTrue(pipeline.isAwaitingBlankClear())
         pipeline.processRecognizedResult(simpleResult(""), null, config)

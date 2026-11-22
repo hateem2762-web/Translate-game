@@ -169,7 +169,7 @@ class InPlaceCanvasRenderer(context: Context) {
     private val subtleRimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 0.75f * density
-        color = Color.argb(26, 255, 255, 255)
+        color = Color.argb(12, 255, 255, 255)
     }
 
     private val fillTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -206,8 +206,10 @@ class InPlaceCanvasRenderer(context: Context) {
         canvasWidth: Int,
         canvasHeight: Int,
         offsetX: Int = 0,
-        offsetY: Int = 0
+        offsetY: Int = 0,
+        outDrawnRects: MutableList<com.example.model.RoiRect>? = null
     ) {
+        outDrawnRects?.clear()
         val visibleBlocks = blocks
             .filter { it.translatedText.isNotBlank() }
             .sortedWith(compareBy<InPlaceBlock> { it.boundingBox.y }.thenBy { it.boundingBox.x })
@@ -235,7 +237,7 @@ class InPlaceCanvasRenderer(context: Context) {
         var compressionLevel = 0
         var placedList: List<PlacedBlock> = emptyList()
 
-        // Try at user's target font size first; if stacked 2-3+ lines collide/overflow canvas,
+        // Try at user's target font size first; if stacked lines collide/overflow canvas,
         // tighten inter-block padding slightly and progressively reduce cap font size until all fit cleanly.
         while (true) {
             val effectivePadY = when {
@@ -287,6 +289,7 @@ class InPlaceCanvasRenderer(context: Context) {
             }
         }
 
+        val haloSpread = 2.5f * density
         for (placed in placedList) {
             val block = placed.block
             val rect = placed.rect
@@ -295,13 +298,21 @@ class InPlaceCanvasRenderer(context: Context) {
             val boxW = rect.width
             val boxH = rect.height
 
+            outDrawnRects?.add(
+                com.example.model.RoiRect(
+                    x = (left - offsetX - haloSpread).toInt().coerceAtLeast(0),
+                    y = (top - offsetY - haloSpread).toInt().coerceAtLeast(0),
+                    width = (boxW + haloSpread * 2f).toInt().coerceAtLeast(16),
+                    height = (boxH + haloSpread * 2f).toInt().coerceAtLeast(16)
+                )
+            )
+
             val maxRadius = minOf(boxW, boxH) / 2f
             val clampedRadius = radius.coerceAtMost(maxRadius)
 
             maskRect.set(left, top, left + boxW, top + boxH)
 
-            // 1. Tight outer feathered halo so edges blend cleanly without bleeding into neighboring lines
-            val haloSpread = 1.5f * density
+            // 1. Soft outer feathered halo so edges blend naturally into the game scene
             haloRect.set(
                 (maskRect.left - haloSpread).coerceAtLeast(0f),
                 (maskRect.top - haloSpread).coerceAtLeast(0f),
@@ -310,12 +321,12 @@ class InPlaceCanvasRenderer(context: Context) {
             )
             val baseColor = block.sampledBgColor
             haloPaint.color = Color.argb(
-                (Color.alpha(baseColor) * 0.48f).toInt().coerceIn(50, 130),
+                (Color.alpha(baseColor) * 0.45f).toInt().coerceIn(48, 125),
                 Color.red(baseColor),
                 Color.green(baseColor),
                 Color.blue(baseColor)
             )
-            val haloRadius = if (clampedRadius > 0f) clampedRadius + 1.5f * density else 0f
+            val haloRadius = if (clampedRadius > 0f) clampedRadius + haloSpread else 0f
             canvas.drawRoundRect(haloRect, haloRadius, haloRadius, haloPaint)
 
             // 2. Clipped frosted glass rounded container
@@ -357,7 +368,9 @@ class InPlaceCanvasRenderer(context: Context) {
             scrimPaint.shader = null
             canvas.restore()
 
-            canvas.drawRoundRect(maskRect, clampedRadius, clampedRadius, subtleRimPaint)
+            if (clampedRadius > 0f) {
+                canvas.drawRoundRect(maskRect, clampedRadius, clampedRadius, subtleRimPaint)
+            }
 
             // 3. Draw crisp readable translated text centered inside frosted backdrop
             val textY = top + ((boxH - placed.layout.height) / 2f).coerceAtLeast(placed.innerPadY)
@@ -396,6 +409,7 @@ class InPlaceCanvasRenderer(context: Context) {
         val maxBoxW = (canvasWidth - edgeMargin * 2f).coerceAtLeast(48f * density)
         val maxBoxH = (canvasHeight - edgeMargin * 2f).coerceAtLeast(28f * density)
         val blockMinSp = (capSp - 3.5f).coerceAtLeast(hardMinSp)
+        val isSingleBlock = blocks.size == 1
 
         return blocks.map { block ->
             val origLeft = offsetX + block.boundingBox.x.toFloat() + userShiftX
@@ -406,13 +420,22 @@ class InPlaceCanvasRenderer(context: Context) {
             val centerY = origTop + origH / 2f
 
             var boxW = (origW + padX * 2f).coerceIn(48f * density, maxBoxW)
-            var availW = (boxW - innerPadX * 2f).toInt().coerceAtLeast(28)
             var boxH = (origH + padY * 2f).coerceAtLeast(22f * density)
 
             var chosenSp = capSp
+            fillTextPaint.textSize = chosenSp * scaledDensity
+            val naturalLineW = Layout.getDesiredWidth(block.translatedText, fillTextPaint)
+            if (isSingleBlock && !block.translatedText.contains('\n')) {
+                val desiredSingleW = (naturalLineW + innerPadX * 2f + 4f * density).coerceAtMost(maxBoxW)
+                if (desiredSingleW > boxW && desiredSingleW <= maxOf(boxW * 1.45f, maxBoxW * 0.88f)) {
+                    boxW = desiredSingleW
+                }
+            }
+
+            var availW = (boxW - innerPadX * 2f).toInt().coerceAtLeast(28)
             var layout = buildLayoutWithPaint(
                 text = block.translatedText,
-                paint = fillTextPaint.apply { textSize = chosenSp * scaledDensity },
+                paint = fillTextPaint,
                 widthPx = availW
             )
 
@@ -425,9 +448,9 @@ class InPlaceCanvasRenderer(context: Context) {
                 )
             }
 
-            // Expand width gently before overflowing height onto neighboring lines
+            // Expand width smoothly before overflowing height onto neighboring lines
             if (layout.height + innerPadY * 2f > boxH && boxW < maxBoxW) {
-                val desiredW = (boxW * 1.25f).coerceAtMost(maxBoxW)
+                val desiredW = (boxW * 1.32f).coerceAtMost(maxBoxW)
                 if (desiredW > boxW + 2f) {
                     boxW = desiredW
                     availW = (boxW - innerPadX * 2f).toInt().coerceAtLeast(28)
@@ -439,7 +462,7 @@ class InPlaceCanvasRenderer(context: Context) {
                 }
             }
 
-            // If a single block still overflows the entire available canvas height, shrink font further down to hardMinSp
+            // If a single block still overflows available canvas height, shrink font further down to hardMinSp
             while (layout.height + innerPadY * 2f > maxBoxH && chosenSp > hardMinSp) {
                 chosenSp = (chosenSp - 0.8f).coerceAtLeast(hardMinSp)
                 layout = buildLayoutWithPaint(

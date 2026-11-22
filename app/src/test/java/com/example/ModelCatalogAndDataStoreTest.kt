@@ -169,8 +169,12 @@ class ModelCatalogAndDataStoreTest {
         assertEquals("Kapıyı tut!", pipeline.output.value.translatedText)
         assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
 
-        // Dialogue disappears -> 2 identical black frames follow (RoiFrameDiffer would return false on frame #2 without bypassDiffer)
+        // Dialogue disappears -> 3 identical black frames follow (RoiFrameDiffer would return false on #2/#3 without bypassDiffer)
         currentOcr = com.example.engine.OcrResult("", emptyList())
+        pipeline.processFrame(blankBitmap, cfg)
+        assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+        assertTrue(pipeline.isAwaitingBlankClear())
+
         pipeline.processFrame(blankBitmap, cfg)
         assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
         assertTrue(pipeline.isAwaitingBlankClear())
@@ -211,7 +215,12 @@ class ModelCatalogAndDataStoreTest {
         // 3. Changing maskSignature re-establishes baseline without triggering false change
         assertFalse(differ.hasUnmaskedVisualChange(innerChangedFrame, masked, maskSignature = 202))
 
-        // 4. Outer unmasked background / edge changes -> MUST return true
+        // 4. Single stray outer sparkle/particle must NOT falsely trigger stealth capture blink
+        val minorSparkleFrame = buildFrame(bgColor = android.graphics.Color.rgb(16, 20, 30), insideMaskColor = android.graphics.Color.CYAN)
+        minorSparkleFrame.setPixel(6, 6, android.graphics.Color.WHITE)
+        assertFalse(differ.hasUnmaskedVisualChange(minorSparkleFrame, masked, maskSignature = 202))
+
+        // 5. Outer unmasked background / edge changes -> MUST return true
         val outerChangedFrame = buildFrame(bgColor = android.graphics.Color.rgb(210, 210, 210), insideMaskColor = android.graphics.Color.CYAN)
         assertTrue(differ.hasUnmaskedVisualChange(outerChangedFrame, masked, maskSignature = 202))
     }

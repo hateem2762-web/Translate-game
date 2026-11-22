@@ -345,29 +345,35 @@ class ScreenTranslatorService : Service() {
                 if (!isPaused && !overlayController.isHistoryVisible()) {
                     val roi = overlayController.getActiveCaptureRoi()
                     val cleanBitmap = if (isInPlaceWithActiveMask) {
-                        val needsImmediateResolution =
-                            pipeline.isAwaitingBlankClear() || pipeline.isStabilizingOrPending()
-                        val shouldStealthCapture = if (needsImmediateResolution) {
-                            true
-                        } else {
-                            // Passive check WITHOUT hiding overlay: compare pixels outside our drawn
-                            // blur boxes and ROI edge strips. If scene didn't change, NEVER hide or OCR!
-                            val passiveBitmap = withContext(Dispatchers.Default) {
-                                captureManager.captureCroppedRoi(roi)
-                            }
-                            if (passiveBitmap == null) {
+                        val isStabilizing = pipeline.isStabilizingOrPending()
+                        val shouldStealthCapture = when {
+                            // Debounce/translation already running -> keep overlay 100% solid, don't flash
+                            isStabilizing -> false
+                            pipeline.isAwaitingBlankClear() -> true
+                            !pipeline.canStealthPeekNow() -> {
+                                pipeline.recordPassiveSkip()
                                 false
-                            } else {
-                                val (maskRects, maskSignature) = overlayController.getActiveMaskRectsInRoi()
-                                val changed = pipeline.hasUnmaskedVisualChange(
-                                    bitmap = passiveBitmap,
-                                    maskedRects = maskRects,
-                                    maskSignature = maskSignature
-                                )
-                                if (!changed) {
-                                    pipeline.recordPassiveSkip()
+                            }
+                            else -> {
+                                // Passive check WITHOUT hiding overlay: compare pixels outside our exact
+                                // drawn blur boxes and ROI perimeter. Only stealth-peek on genuine scene change.
+                                val passiveBitmap = withContext(Dispatchers.Default) {
+                                    captureManager.captureCroppedRoi(roi)
                                 }
-                                changed
+                                if (passiveBitmap == null) {
+                                    false
+                                } else {
+                                    val (maskRects, maskSignature) = overlayController.getActiveMaskRectsInRoi()
+                                    val changed = pipeline.hasUnmaskedVisualChange(
+                                        bitmap = passiveBitmap,
+                                        maskedRects = maskRects,
+                                        maskSignature = maskSignature
+                                    )
+                                    if (!changed) {
+                                        pipeline.recordPassiveSkip()
+                                    }
+                                    changed
+                                }
                             }
                         }
 
@@ -378,8 +384,8 @@ class ScreenTranslatorService : Service() {
                                 captureManager.awaitAndCaptureStealthRoi(
                                     roi = roi,
                                     minValidTimestampNs = minValidTsNs,
-                                    settleMs = 28L,
-                                    maxWaitMs = 90L
+                                    settleMs = 22L,
+                                    maxWaitMs = 68L
                                 )
                             } finally {
                                 overlayController.setInPlaceStealth(false)
@@ -399,9 +405,9 @@ class ScreenTranslatorService : Service() {
                 }
 
                 val loopDelay = when {
-                    isInPlaceWithActiveMask &&
-                        (pipeline.isAwaitingBlankClear() || pipeline.isStabilizingOrPending()) -> 140L
-                    isInPlaceWithActiveMask -> maxOf(currentConfig.scanIntervalMs, 650L)
+                    isInPlaceWithActiveMask && pipeline.isStabilizingOrPending() -> 180L
+                    isInPlaceWithActiveMask && pipeline.isAwaitingBlankClear() -> 320L
+                    isInPlaceWithActiveMask -> maxOf(currentConfig.scanIntervalMs, 700L)
                     else -> currentConfig.scanIntervalMs.coerceIn(150L, 1200L)
                 }
                 delay(loopDelay)

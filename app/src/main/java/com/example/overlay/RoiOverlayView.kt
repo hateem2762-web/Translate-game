@@ -6,14 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.Rect
-import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
-import android.os.Handler
-import android.os.Looper
-import android.text.Layout
-import android.text.StaticLayout
-import android.text.TextPaint
 import android.util.TypedValue
 import android.view.Choreographer
 import android.view.Gravity
@@ -127,26 +120,28 @@ class RoiOverlayView(
     fun getActiveMaskRectsInRoi(): Pair<List<RoiRect>, Int> = inPlaceLayer.getMaskRectsAndSignature()
 
     fun setInPlaceStealth(hidden: Boolean) {
-        inPlaceLayer.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
-        inPlaceLayer.alpha = if (hidden) 0f else 1f
+        val targetVis = if (hidden) View.INVISIBLE else View.VISIBLE
+        val targetAlpha = if (hidden) 0f else 1f
+        if (inPlaceLayer.visibility == targetVis && inPlaceLayer.alpha == targetAlpha) return
+        inPlaceLayer.visibility = targetVis
+        inPlaceLayer.alpha = targetAlpha
         inPlaceLayer.invalidate()
     }
 
     /**
-     * Hides the In-Place layer and suspends until Android's Choreographer UI traversal
-     * has finished drawing the invisible state, returning the monotonic timestamp (ns).
+     * Hides the In-Place layer and waits for Android's Choreographer UI traversal
+     * so the invisible state is submitted to SurfaceFlinger, returning the monotonic
+     * timestamp recorded right when hiding began (so valid frames are never rejected).
      */
     suspend fun awaitHiddenCommittedNs(): Long {
+        val hideRequestedNs = System.nanoTime()
         setInPlaceStealth(true)
-        val committed = withTimeoutOrNull(45L) {
+        withTimeoutOrNull(36L) {
             suspendCancellableCoroutine { cont ->
                 val choreographer = Choreographer.getInstance()
-                val mainHandler = Handler(Looper.getMainLooper())
                 val frameCallback = Choreographer.FrameCallback {
-                    mainHandler.post {
-                        if (cont.isActive) {
-                            cont.resume(System.nanoTime())
-                        }
+                    if (cont.isActive) {
+                        cont.resume(Unit)
                     }
                 }
                 choreographer.postFrameCallback(frameCallback)
@@ -155,7 +150,7 @@ class RoiOverlayView(
                 }
             }
         }
-        return committed ?: System.nanoTime()
+        return hideRequestedNs + 2_000_000L
     }
 
     /**
@@ -246,30 +241,57 @@ class RoiOverlayView(
         private val renderer = InPlaceCanvasRenderer(context)
         private var blocks: List<InPlaceBlock> = emptyList()
         private var style: InPlaceRenderStyle = InPlaceRenderStyle()
+        private val lastDrawnMaskRects = mutableListOf<RoiRect>()
 
         fun setBlocks(newBlocks: List<InPlaceBlock>, newStyle: InPlaceRenderStyle) {
+            if (newStyle == style && hasSameRenderedBlocks(blocks, newBlocks)) {
+                return
+            }
             blocks = newBlocks
             style = newStyle
+            if (newBlocks.isEmpty()) {
+                lastDrawnMaskRects.clear()
+            }
             invalidate()
+        }
+
+        private fun hasSameRenderedBlocks(a: List<InPlaceBlock>, b: List<InPlaceBlock>): Boolean {
+            if (a.size != b.size) return false
+            for (i in a.indices) {
+                val x = a[i]
+                val y = b[i]
+                if (x.boundingBox != y.boundingBox ||
+                    x.translatedText != y.translatedText ||
+                    x.sampledBgColor != y.sampledBgColor ||
+                    x.blurredPatch !== y.blurredPatch
+                ) {
+                    return false
+                }
+            }
+            return true
         }
 
         fun hasBlocks(): Boolean = blocks.isNotEmpty()
 
         fun getMaskRectsAndSignature(): Pair<List<RoiRect>, Int> {
             if (blocks.isEmpty()) return emptyList<RoiRect>() to 0
-            val d = resources.displayMetrics.density
-            val marginX = ((style.paddingXdp + 8f) * d).toInt().coerceAtLeast(8)
-            val marginY = ((style.paddingYdp + 8f) * d).toInt().coerceAtLeast(8)
-            val shiftX = (style.offsetXdp * d).toInt()
-            val shiftY = (style.offsetYdp * d).toInt()
-            val rects = blocks.map { b ->
-                val box = b.boundingBox
-                RoiRect(
-                    x = (box.x + shiftX - marginX).coerceAtLeast(0),
-                    y = (box.y + shiftY - marginY).coerceAtLeast(0),
-                    width = (box.width + marginX * 2).coerceAtLeast(16),
-                    height = (box.height + marginY * 2).coerceAtLeast(16)
-                )
+            val rects = if (lastDrawnMaskRects.isNotEmpty()) {
+                lastDrawnMaskRects.toList()
+            } else {
+                val d = resources.displayMetrics.density
+                val marginX = ((style.paddingXdp + 12f) * d).toInt().coerceAtLeast(12)
+                val marginY = ((style.paddingYdp + 10f) * d).toInt().coerceAtLeast(10)
+                val shiftX = (style.offsetXdp * d).toInt()
+                val shiftY = (style.offsetYdp * d).toInt()
+                blocks.map { b ->
+                    val box = b.boundingBox
+                    RoiRect(
+                        x = (box.x + shiftX - marginX).coerceAtLeast(0),
+                        y = (box.y + shiftY - marginY).coerceAtLeast(0),
+                        width = (box.width + marginX * 2).coerceAtLeast(16),
+                        height = (box.height + marginY * 2).coerceAtLeast(16)
+                    )
+                }
             }
             var sig = 17
             for (b in blocks) {
@@ -282,7 +304,10 @@ class RoiOverlayView(
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            if (blocks.isEmpty()) return
+            if (blocks.isEmpty()) {
+                lastDrawnMaskRects.clear()
+                return
+            }
             renderer.drawBlocks(
                 canvas = canvas,
                 blocks = blocks,
@@ -290,7 +315,8 @@ class RoiOverlayView(
                 canvasWidth = width,
                 canvasHeight = height,
                 offsetX = insetCapturePx,
-                offsetY = insetCapturePx
+                offsetY = insetCapturePx,
+                outDrawnRects = lastDrawnMaskRects
             )
         }
     }

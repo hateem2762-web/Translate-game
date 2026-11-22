@@ -57,9 +57,11 @@ class SubtitlePipeline(
     private val boxStabilizer = BoundingBoxStabilizer()
 
     // Quota protection: keep a compact fuzzy cache & pace uncached SMART_AI network calls
-    private val recentFuzzyCache = ArrayDeque<Pair<String, String>>(25)
+    private var recentFuzzyCache = ArrayDeque<Pair<String, String>>(25)
     private var lastFuzzyCacheNamespace: String = ""
     private var lastCloudCallElapsedMs: Long = 0L
+    private var stealthCooldownUntilMs: Long = 0L
+    private var consecutiveSameTextPeeks: Int = 0
 
     fun reset() {
         debounceJob?.cancel()
@@ -71,6 +73,8 @@ class SubtitlePipeline(
         lastRenderedTranslations.clear()
         lastRenderedCombined = ""
         consecutiveBlankFrames = 0
+        consecutiveSameTextPeeks = 0
+        stealthCooldownUntilMs = 0L
         boxStabilizer.reset()
         frameDiffer.reset()
         _output.value = PipelineOutput()
@@ -79,6 +83,8 @@ class SubtitlePipeline(
     fun invalidateVisualCache() {
         frameDiffer.reset()
         boxStabilizer.reset()
+        consecutiveSameTextPeeks = 0
+        stealthCooldownUntilMs = 0L
     }
 
     fun clearActiveSubtitle() {
@@ -86,6 +92,8 @@ class SubtitlePipeline(
         lastRenderedTranslations.clear()
         lastRenderedCombined = ""
         consecutiveBlankFrames = 0
+        consecutiveSameTextPeeks = 0
+        stealthCooldownUntilMs = 0L
         boxStabilizer.reset()
         _output.value = _output.value.copy(
             sourceText = "",
@@ -100,6 +108,9 @@ class SubtitlePipeline(
 
     fun isStabilizingOrPending(): Boolean =
         _output.value.isStabilizing || pendingCandidate.isNotEmpty() || debounceJob?.isActive == true
+
+    fun canStealthPeekNow(nowMs: Long = System.currentTimeMillis()): Boolean =
+        nowMs >= stealthCooldownUntilMs
 
     fun hasUnmaskedVisualChange(
         bitmap: Bitmap,
@@ -146,7 +157,7 @@ class SubtitlePipeline(
         val normalized = normalizeText(ocrResult.fullText, isChinese)
         val current = _output.value
 
-        val blankClearThreshold = 2
+        val blankClearThreshold = if (config.displayMode == DisplayMode.IN_PLACE_BLUR) 3 else 2
         if (normalized.isBlank()) {
             val hasActiveContent = current.inPlaceBlocks.isNotEmpty() ||
                 current.translatedText.isNotBlank() ||
@@ -160,6 +171,8 @@ class SubtitlePipeline(
             consecutiveBlankFrames++
             if (consecutiveBlankFrames >= blankClearThreshold) {
                 consecutiveBlankFrames = 0
+                consecutiveSameTextPeeks = 0
+                stealthCooldownUntilMs = 0L
                 debounceJob?.cancel()
                 debounceJob = null
                 pendingCandidate = ""
@@ -197,6 +210,8 @@ class SubtitlePipeline(
 
         // Self-OCR loop guard: in In-Place mode, never re-translate our own rendered overlay text
         if (config.displayMode == DisplayMode.IN_PLACE_BLUR && isSelfGeneratedOverlayText(normalized)) {
+            consecutiveSameTextPeeks = (consecutiveSameTextPeeks + 1).coerceAtMost(2)
+            stealthCooldownUntilMs = System.currentTimeMillis() + 1200L
             frameDiffer.reset()
             _output.value = current.copy(
                 framesProcessed = current.framesProcessed + 1,
@@ -215,6 +230,8 @@ class SubtitlePipeline(
                 cleanCur.length >= 5 &&
                 BoundingBoxStabilizer.textSimilarity(cleanCur, cleanPrev) >= 0.82f)
         if (isUnchangedOrMinorFlicker) {
+            consecutiveSameTextPeeks = (consecutiveSameTextPeeks + 1).coerceAtMost(2)
+            stealthCooldownUntilMs = System.currentTimeMillis() + (900L * consecutiveSameTextPeeks)
             _output.value = current.copy(
                 framesProcessed = current.framesProcessed + 1,
                 framesSkipped = current.framesSkipped + 1,
@@ -245,6 +262,8 @@ class SubtitlePipeline(
             return
         }
 
+        consecutiveSameTextPeeks = 0
+        stealthCooldownUntilMs = 0L
         pendingCandidate = normalized
         pendingBlocks = boxStabilizer.stabilize(ocrResult.blocks, isChinese)
         recyclePendingSnapshot()

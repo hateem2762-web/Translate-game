@@ -6,11 +6,14 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Eliminates In-Place Blur bounding-box jitter, vibration, and corner-jumping across OCR frames:
- * 1. Deterministically merges OCR fragments on the same visual row.
- * 2. Applies a spatial deadband (ignores sub-threshold pixel wobble).
- * 3. Locks coordinates completely when recognized text is identical or >=85% similar.
- * 4. Smooths genuine multi-frame shifts with an Exponential Moving Average (EMA).
+ * Eliminates In-Place Blur bounding-box jitter, vibration, corner-jumping, and fragmented
+ * multi-line splitting across OCR frames:
+ * 1. Deterministically merges OCR fragments on the same visual row (respecting horizontal gaps).
+ * 2. Merges tightly stacked multi-line dialogue sentences into ONE cohesive paragraph block so
+ *    translations stay grammatically natural and visually unified.
+ * 3. Applies a spatial deadband (ignores sub-threshold pixel wobble).
+ * 4. Locks coordinates completely when recognized text is identical or >=85% similar.
+ * 5. Smooths genuine multi-frame shifts with an Exponential Moving Average (EMA).
  */
 class BoundingBoxStabilizer(
     private val originDeadbandPx: Int = 14,
@@ -35,7 +38,8 @@ class BoundingBoxStabilizer(
             return emptyList()
         }
 
-        val merged = mergeRowBlocks(rawBlocks, isChinese)
+        val rowMerged = mergeRowBlocks(rawBlocks, isChinese)
+        val merged = mergeParagraphBlocks(rowMerged, isChinese)
         val previous = trackedBlocks
 
         if (previous.isEmpty() || previous.size != merged.size) {
@@ -109,8 +113,8 @@ class BoundingBoxStabilizer(
 
     companion object {
         /**
-         * Groups OCR blocks that share essentially the same horizontal baseline so that a single
-         * dialogue line split into two ML Kit blocks merges deterministically left-to-right.
+         * Groups OCR blocks that share the same horizontal baseline AND sit within normal
+         * phrase spacing (leaving distant left/right UI buttons separate).
          */
         fun mergeRowBlocks(blocks: List<OcrBlock>, isChinese: Boolean): List<OcrBlock> {
             if (blocks.size <= 1) return blocks
@@ -135,31 +139,114 @@ class BoundingBoxStabilizer(
                 }
             }
 
-            return rows.map { row ->
+            val merged = mutableListOf<OcrBlock>()
+            for (row in rows) {
                 val ordered = row.sortedBy { it.boundingBox.x }
                 if (ordered.size == 1) {
-                    ordered.first()
-                } else {
-                    val minX = ordered.minOf { it.boundingBox.x }
-                    val minY = ordered.minOf { it.boundingBox.y }
-                    val maxR = ordered.maxOf { it.boundingBox.x + it.boundingBox.width }
-                    val maxB = ordered.maxOf { it.boundingBox.y + it.boundingBox.height }
-                    val joinedText = if (isChinese) {
-                        MlKitOcrEngine.joinChineseBlocks(ordered.map { it.text })
+                    merged.add(ordered.first())
+                    continue
+                }
+                val clusters = mutableListOf<MutableList<OcrBlock>>()
+                for (blk in ordered) {
+                    val lastCluster = clusters.lastOrNull()
+                    if (lastCluster == null) {
+                        clusters.add(mutableListOf(blk))
                     } else {
-                        ordered.joinToString(" ") { it.text.trim() }.trim()
+                        val prevRight = lastCluster.maxOf { it.boundingBox.x + it.boundingBox.width }
+                        val maxH = max(lastCluster.maxOf { it.boundingBox.height }, blk.boundingBox.height).coerceAtLeast(16)
+                        val horizontalGap = blk.boundingBox.x - prevRight
+                        if (horizontalGap <= maxH * 2.5f) {
+                            lastCluster.add(blk)
+                        } else {
+                            clusters.add(mutableListOf(blk))
+                        }
                     }
-                    OcrBlock(
-                        text = joinedText,
-                        boundingBox = RoiRect(
-                            x = minX,
-                            y = minY,
-                            width = (maxR - minX).coerceAtLeast(16),
-                            height = (maxB - minY).coerceAtLeast(12)
-                        )
-                    )
+                }
+                for (cluster in clusters) {
+                    merged.add(combineCluster(cluster, isChinese, isParagraphVerticalMerge = false))
                 }
             }
+            return merged
+        }
+
+        /**
+         * Merges consecutive vertical dialogue lines that form ONE coherent paragraph/sentence
+         * (tight line-leading gap, compatible font height, overlapping/centered horizontal column)
+         * so translations stay fluent and draw as ONE unified frosted panel rather than jagged
+         * line-by-line fragments. Distant regions or side-by-side buttons remain separate.
+         */
+        fun mergeParagraphBlocks(blocks: List<OcrBlock>, isChinese: Boolean): List<OcrBlock> {
+            if (blocks.size <= 1) return blocks
+
+            val sorted = blocks.sortedWith(
+                compareBy<OcrBlock> { it.boundingBox.y }.thenBy { it.boundingBox.x }
+            )
+
+            val paragraphs = mutableListOf<MutableList<OcrBlock>>()
+            for (blk in sorted) {
+                val targetPara = paragraphs.lastOrNull()?.takeIf { para ->
+                    val last = para.last()
+                    shouldMergeIntoSameParagraph(last.boundingBox, blk.boundingBox)
+                }
+                if (targetPara != null) {
+                    targetPara.add(blk)
+                } else {
+                    paragraphs.add(mutableListOf(blk))
+                }
+            }
+
+            return paragraphs.map { para ->
+                combineCluster(para, isChinese, isParagraphVerticalMerge = true)
+            }
+        }
+
+        private fun shouldMergeIntoSameParagraph(topBox: RoiRect, bottomBox: RoiRect): Boolean {
+            val topBottom = topBox.y + topBox.height
+            val gapY = bottomBox.y - topBottom
+            val minH = min(topBox.height, bottomBox.height).coerceAtLeast(12)
+            val maxH = max(topBox.height, bottomBox.height).coerceAtLeast(12)
+
+            // Same-row side-by-side elements (negative vertical gap exceeding line height) shouldn't merge here
+            if (gapY < -minH * 0.45f) return false
+            // Separate UI sections (e.g. header vs subtitle far below) have large vertical gap
+            if (gapY > maxH * 0.95f) return false
+            // Significantly different font sizes (e.g. tiny tag vs big dialogue) stay separate
+            if (maxH > minH * 1.85f) return false
+
+            val topRight = topBox.x + topBox.width
+            val bottomRight = bottomBox.x + bottomBox.width
+            val horizOverlap = min(topRight, bottomRight) - max(topBox.x, bottomBox.x)
+            val topCx = topBox.x + topBox.width / 2f
+            val bottomCx = bottomBox.x + bottomBox.width / 2f
+            val maxW = max(topBox.width, bottomBox.width).coerceAtLeast(24)
+
+            return horizOverlap > -maxH * 1.2f || abs(topCx - bottomCx) <= maxW * 0.65f
+        }
+
+        private fun combineCluster(
+            cluster: List<OcrBlock>,
+            isChinese: Boolean,
+            isParagraphVerticalMerge: Boolean
+        ): OcrBlock {
+            if (cluster.size == 1) return cluster.first()
+            val minX = cluster.minOf { it.boundingBox.x }
+            val minY = cluster.minOf { it.boundingBox.y }
+            val maxR = cluster.maxOf { it.boundingBox.x + it.boundingBox.width }
+            val maxB = cluster.maxOf { it.boundingBox.y + it.boundingBox.height }
+            val joinedText = when {
+                isChinese -> OcrTextPreprocessor.joinChineseBlocks(cluster.map { it.text })
+                isParagraphVerticalMerge -> OcrTextPreprocessor.joinParagraphLines(cluster.map { it.text })
+                else -> cluster.joinToString(" ") { it.text.trim() }.trim()
+            }
+            return OcrBlock(
+                text = joinedText,
+                boundingBox = RoiRect(
+                    x = minX,
+                    y = minY,
+                    width = (maxR - minX).coerceAtLeast(16),
+                    height = (maxB - minY).coerceAtLeast(12)
+                )
+            )
         }
 
         /**

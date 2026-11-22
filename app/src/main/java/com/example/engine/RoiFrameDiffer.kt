@@ -112,12 +112,14 @@ class RoiFrameDiffer(
             return false
         }
 
-        // Slightly tighter edge sensitivity so subtle dialogue box fades / button cues still trigger
-        val changed = exceedsDelta(
+        // Tolerate subtle 1-2 pixel background sparkles/particles; trigger only on genuine
+        // scene/dialogue changes (meaningful average shift OR >=14% of sampled points shifted).
+        val changed = exceedsUnmaskedDelta(
             prev = prev,
             current = current,
-            avgThreshold = 1.6f,
-            peakThreshold = 11
+            avgThreshold = 4.2f,
+            pointDeltaThreshold = 16,
+            changedRatioThreshold = 0.14f
         )
         if (changed) {
             maskedBaselineSample = current
@@ -164,5 +166,27 @@ class RoiFrameDiffer(
         }
         val avgDelta = sumDelta.toFloat() / current.size.coerceAtLeast(1)
         return avgDelta > avgThreshold || peakDelta > peakThreshold
+    }
+
+    private fun exceedsUnmaskedDelta(
+        prev: IntArray,
+        current: IntArray,
+        avgThreshold: Float,
+        pointDeltaThreshold: Int,
+        changedRatioThreshold: Float
+    ): Boolean {
+        var sumDelta = 0
+        var changedCount = 0
+        val count = current.size.coerceAtLeast(1)
+        for (i in current.indices) {
+            val delta = abs(current[i] - prev[i])
+            sumDelta += delta
+            if (delta > pointDeltaThreshold) {
+                changedCount++
+            }
+        }
+        val avgDelta = sumDelta.toFloat() / count
+        val changedRatio = changedCount.toFloat() / count
+        return avgDelta > avgThreshold || changedRatio >= changedRatioThreshold
     }
 }
