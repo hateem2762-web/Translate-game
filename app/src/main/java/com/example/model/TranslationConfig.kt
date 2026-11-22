@@ -14,55 +14,112 @@ enum class TranslationEngineMode(val shortLabelTr: String) {
     LIBRETRANSLATE("Libre")
 }
 
+data class AiModelOption(
+    val id: String,
+    val label: String = id
+)
+
 enum class AiProviderPreset(
     val displayName: String,
     val shortLabelTr: String,
     val defaultBaseUrl: String,
     val defaultModel: String,
-    val requiresUserApiKey: Boolean
+    val requiresUserApiKey: Boolean,
+    val storageKeySuffix: String,
+    val curatedModels: List<AiModelOption>
 ) {
     GROQ(
         displayName = "Groq (Ücretsiz & Ultra Hızlı)",
         shortLabelTr = "Groq",
         defaultBaseUrl = "https://api.groq.com/openai/v1/chat/completions",
-        defaultModel = "llama-3.3-70b-versatile",
-        requiresUserApiKey = true
+        defaultModel = "openai/gpt-oss-20b",
+        requiresUserApiKey = true,
+        storageKeySuffix = "groq",
+        curatedModels = listOf(
+            AiModelOption("openai/gpt-oss-20b", "openai/gpt-oss-20b (Varsayılan • Ultra Hızlı)"),
+            AiModelOption("qwen/qwen3.8-27b", "qwen/qwen3.8-27b (En İyi Çince & Oyun Çevirisi)"),
+            AiModelOption("openai/gpt-oss-120b", "openai/gpt-oss-120b (Yüksek Kalite)")
+        )
     ),
     CEREBRAS(
         displayName = "Cerebras (Ücretsiz & Ultra Hızlı)",
         shortLabelTr = "Cerebras",
         defaultBaseUrl = "https://api.cerebras.ai/v1/chat/completions",
-        defaultModel = "llama-3.3-70b",
-        requiresUserApiKey = true
+        defaultModel = "gpt-oss-120b",
+        requiresUserApiKey = true,
+        storageKeySuffix = "cerebras",
+        curatedModels = listOf(
+            AiModelOption("gpt-oss-120b", "gpt-oss-120b (Varsayılan • Ultra Hızlı)"),
+            AiModelOption("qwen-3.8-27b", "qwen-3.8-27b (Çince & Oyun Çevirisi)")
+        )
     ),
     OPENROUTER(
         displayName = "OpenRouter",
         shortLabelTr = "OpenRouter",
         defaultBaseUrl = "https://openrouter.ai/api/v1/chat/completions",
-        defaultModel = "meta-llama/llama-3.3-70b-instruct:free",
-        requiresUserApiKey = true
+        defaultModel = "openai/gpt-oss-20b:free",
+        requiresUserApiKey = true,
+        storageKeySuffix = "openrouter",
+        curatedModels = listOf(
+            AiModelOption("openai/gpt-oss-20b:free", "openai/gpt-oss-20b:free (Varsayılan • Ücretsiz)"),
+            AiModelOption("qwen/qwen3.8-27b:free", "qwen/qwen3.8-27b:free (Çince & Oyun Çevirisi)")
+        )
     ),
-    GEMINI_FLASH(
-        displayName = "Google Gemini Flash (Düşünme=0, Min Gecikme)",
-        shortLabelTr = "Gemini Flash",
+    GEMINI(
+        displayName = "Google Gemini (Düşünme=0, Min Gecikme)",
+        shortLabelTr = "Gemini",
         defaultBaseUrl = "firebase-ai-logic",
-        defaultModel = "gemini-3.8-flash",
-        requiresUserApiKey = false
-    ),
-    GEMINI_LITE(
-        displayName = "Google Gemini Flash-Lite (Kota Dostu)",
-        shortLabelTr = "Flash-Lite",
-        defaultBaseUrl = "firebase-ai-logic",
-        defaultModel = "gemini-3.5-flash-lite",
-        requiresUserApiKey = false
+        defaultModel = "gemini-2.5-flash-lite",
+        requiresUserApiKey = false,
+        storageKeySuffix = "gemini",
+        curatedModels = listOf(
+            AiModelOption("gemini-2.5-flash-lite", "gemini-2.5-flash-lite (Varsayılan • En Hızlı)"),
+            AiModelOption("gemini-2.5-flash", "gemini-2.5-flash (Yüksek Kalite)")
+        )
     ),
     OPENAI_COMPATIBLE(
         displayName = "Özel OpenAI Uyumlu Uç Nokta",
         shortLabelTr = "Özel API",
         defaultBaseUrl = "https://api.openai.com/v1/chat/completions",
         defaultModel = "gpt-4o-mini",
-        requiresUserApiKey = true
-    )
+        requiresUserApiKey = true,
+        storageKeySuffix = "custom",
+        curatedModels = listOf(
+            AiModelOption("gpt-4o-mini", "gpt-4o-mini (Varsayılan)"),
+            AiModelOption("gpt-4.1-mini", "gpt-4.1-mini")
+        )
+    );
+
+    companion object {
+        val DEPRECATED_MODEL_IDS = setOf(
+            "llama-3.1-8b-instant",
+            "llama-3.3-70b-versatile",
+            "llama-3.3-70b",
+            "llama3.1-8b",
+            "qwen-qwq-32b",
+            "qwen-3-32b",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemini-2.0-flash-exp:free",
+            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite"
+        )
+
+        fun fromPersistedName(raw: String?): AiProviderPreset {
+            return when (raw) {
+                "GEMINI_FLASH", "GEMINI_LITE", "GEMINI" -> GEMINI
+                null -> GEMINI
+                else -> runCatching { valueOf(raw) }.getOrDefault(GEMINI)
+            }
+        }
+
+        fun sanitizeModelId(preset: AiProviderPreset, rawModel: String?): String {
+            val trimmed = rawModel?.trim().orEmpty()
+            if (trimmed.isEmpty() || trimmed in DEPRECATED_MODEL_IDS) {
+                return preset.defaultModel
+            }
+            return trimmed
+        }
+    }
 }
 
 enum class SupportedLanguage(
@@ -118,12 +175,29 @@ data class TranslationConfig(
     val classicBoxOpacity: Float = 0.86f,
     val aiPreset: AiProviderPreset = AiProviderPreset.GROQ,
     val aiApiKey: String = "",
-    val aiEndpointUrl: String = AiProviderPreset.GROQ.defaultBaseUrl,
-    val aiModelName: String = AiProviderPreset.GROQ.defaultModel,
+    val aiApiKeys: Map<AiProviderPreset, String> = emptyMap(),
+    val aiEndpointUrl: String = aiPreset.defaultBaseUrl,
+    val aiModelName: String = aiPreset.defaultModel,
+    val aiModelsByPreset: Map<AiProviderPreset, String> = emptyMap(),
+    val aiEndpointsByPreset: Map<AiProviderPreset, String> = emptyMap(),
     // LibreTranslate (self-hosted or hosted instance). API key is optional for self-hosted servers.
     val libreEndpointUrl: String = DEFAULT_LIBRE_ENDPOINT,
     val libreApiKey: String = ""
 ) {
+    fun apiKeyFor(preset: AiProviderPreset): String {
+        return aiApiKeys[preset] ?: if (preset == aiPreset) aiApiKey else ""
+    }
+
+    fun modelFor(preset: AiProviderPreset): String {
+        val raw = aiModelsByPreset[preset] ?: if (preset == aiPreset) aiModelName else preset.defaultModel
+        return AiProviderPreset.sanitizeModelId(preset, raw)
+    }
+
+    fun endpointFor(preset: AiProviderPreset): String {
+        return aiEndpointsByPreset[preset]?.takeIf { it.isNotBlank() }
+            ?: if (preset == aiPreset && aiEndpointUrl.isNotBlank()) aiEndpointUrl else preset.defaultBaseUrl
+    }
+
     companion object {
         const val DEFAULT_LIBRE_ENDPOINT = "https://libretranslate.com"
     }

@@ -126,27 +126,32 @@ class ScreenCaptureManager(
     }
 
     /**
-     * Discards any stale frame sitting in the ImageReader buffer before a stealth capture pulse.
+     * Discards all stale frames sitting in the ImageReader buffer before a stealth capture pulse.
      */
     fun drainPendingFrame() {
-        runCatching { imageReader?.acquireLatestImage()?.close() }
+        runCatching {
+            while (true) {
+                val img = imageReader?.acquireNextImage() ?: break
+                img.close()
+            }
+        }
         val signal = CompletableDeferred<Unit>()
         nextFrameSignal = signal
     }
 
     /**
-     * Waits only as long as needed (typically 1 vsync ~18-28ms) for a fresh clean frame after
-     * temporarily hiding the In-Place overlay, eliminating visible 100ms+ blinking.
+     * Waits past SurfaceFlinger's hide-overlay composite (~34ms) for a clean frame without the
+     * In-Place blur/text overlay, then acquires the latest frame so any earlier dirty frame is dropped.
      */
     suspend fun awaitAndCaptureStealthRoi(
         roi: RoiRect,
-        minSettleMs: Long = 18L,
-        maxWaitMs: Long = 45L
+        minSettleMs: Long = 34L,
+        maxWaitMs: Long = 75L
     ): Bitmap? {
         delay(minSettleMs)
         val signal = nextFrameSignal
         if (signal != null && !signal.isCompleted) {
-            val remaining = (maxWaitMs - minSettleMs).coerceAtLeast(8L)
+            val remaining = (maxWaitMs - minSettleMs).coerceAtLeast(10L)
             withTimeoutOrNull(remaining) {
                 signal.await()
             }

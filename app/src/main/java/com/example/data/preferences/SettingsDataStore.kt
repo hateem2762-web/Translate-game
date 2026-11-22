@@ -49,9 +49,16 @@ class SettingsDataStore(private val context: Context) {
         val CLASSIC_BOX_OPACITY = floatPreferencesKey("classic_box_opacity")
 
         val AI_PRESET = stringPreferencesKey("ai_preset")
-        val AI_API_KEY = stringPreferencesKey("ai_api_key")
+        val LEGACY_AI_API_KEY = stringPreferencesKey("ai_api_key")
         val AI_ENDPOINT_URL = stringPreferencesKey("ai_endpoint_url")
         val AI_MODEL_NAME = stringPreferencesKey("ai_model_name")
+
+        // Isolated per-provider API keys
+        val API_KEY_GROQ = stringPreferencesKey("api_key_groq")
+        val API_KEY_CEREBRAS = stringPreferencesKey("api_key_cerebras")
+        val API_KEY_OPENROUTER = stringPreferencesKey("api_key_openrouter")
+        val API_KEY_GEMINI = stringPreferencesKey("api_key_gemini")
+        val API_KEY_CUSTOM = stringPreferencesKey("api_key_custom")
 
         val LIBRE_ENDPOINT_URL = stringPreferencesKey("libre_endpoint_url")
         val LIBRE_API_KEY = stringPreferencesKey("libre_api_key")
@@ -60,12 +67,55 @@ class SettingsDataStore(private val context: Context) {
         val ROI_Y = intPreferencesKey("roi_y")
         val ROI_W = intPreferencesKey("roi_w")
         val ROI_H = intPreferencesKey("roi_h")
+
+        fun apiKeyFor(preset: AiProviderPreset): Preferences.Key<String> = when (preset) {
+            AiProviderPreset.GROQ -> API_KEY_GROQ
+            AiProviderPreset.CEREBRAS -> API_KEY_CEREBRAS
+            AiProviderPreset.OPENROUTER -> API_KEY_OPENROUTER
+            AiProviderPreset.GEMINI -> API_KEY_GEMINI
+            AiProviderPreset.OPENAI_COMPATIBLE -> API_KEY_CUSTOM
+        }
+
+        fun modelFor(preset: AiProviderPreset): Preferences.Key<String> =
+            stringPreferencesKey("ai_model_${preset.storageKeySuffix}")
+
+        fun endpointFor(preset: AiProviderPreset): Preferences.Key<String> =
+            stringPreferencesKey("ai_endpoint_${preset.storageKeySuffix}")
     }
 
     val configFlow: Flow<TranslationConfig> = context.dataStore.data.map { prefs ->
-        val preset = runCatching {
-            AiProviderPreset.valueOf(prefs[Keys.AI_PRESET] ?: AiProviderPreset.GEMINI_FLASH.name)
-        }.getOrDefault(AiProviderPreset.GEMINI_FLASH)
+        val rawPreset = prefs[Keys.AI_PRESET]
+        val preset = AiProviderPreset.fromPersistedName(rawPreset)
+
+        // One-time safe migration of any legacy single api_key based strictly on key prefix
+        val legacyKey = prefs[Keys.LEGACY_AI_API_KEY].orEmpty().trim()
+        val isolatedKeys = AiProviderPreset.entries.associateWith { p ->
+            val stored = prefs[Keys.apiKeyFor(p)].orEmpty()
+            if (stored.isNotEmpty()) {
+                stored
+            } else if (legacyKey.isNotEmpty() && matchesLegacyKeyProvider(legacyKey, p, preset)) {
+                legacyKey
+            } else {
+                ""
+            }
+        }
+
+        val isolatedModels = AiProviderPreset.entries.associateWith { p ->
+            val rawModel = prefs[Keys.modelFor(p)] ?: if (p == preset) prefs[Keys.AI_MODEL_NAME] else null
+            AiProviderPreset.sanitizeModelId(p, rawModel)
+        }
+        val isolatedEndpoints = AiProviderPreset.entries.associateWith { p ->
+            prefs[Keys.endpointFor(p)]?.takeIf { it.isNotBlank() }
+                ?: if (p == preset && rawPreset == p.name) {
+                    prefs[Keys.AI_ENDPOINT_URL]?.takeIf { it.isNotBlank() } ?: p.defaultBaseUrl
+                } else {
+                    p.defaultBaseUrl
+                }
+        }
+
+        val activeApiKey = isolatedKeys[preset].orEmpty()
+        val activeModel = isolatedModels[preset] ?: preset.defaultModel
+        val activeEndpoint = isolatedEndpoints[preset] ?: preset.defaultBaseUrl
 
         val displayMode = runCatching {
             DisplayMode.valueOf(prefs[Keys.DISPLAY_MODE] ?: DisplayMode.CLASSIC_BOX.name)
@@ -107,12 +157,29 @@ class SettingsDataStore(private val context: Context) {
             classicBoxY = prefs[Keys.CLASSIC_BOX_Y] ?: -1,
             classicBoxOpacity = (prefs[Keys.CLASSIC_BOX_OPACITY] ?: 0.86f).coerceIn(0f, 1f),
             aiPreset = preset,
-            aiApiKey = prefs[Keys.AI_API_KEY] ?: "",
-            aiEndpointUrl = prefs[Keys.AI_ENDPOINT_URL] ?: preset.defaultBaseUrl,
-            aiModelName = prefs[Keys.AI_MODEL_NAME] ?: preset.defaultModel,
+            aiApiKey = activeApiKey,
+            aiApiKeys = isolatedKeys,
+            aiEndpointUrl = activeEndpoint,
+            aiModelName = activeModel,
+            aiModelsByPreset = isolatedModels,
+            aiEndpointsByPreset = isolatedEndpoints,
             libreEndpointUrl = prefs[Keys.LIBRE_ENDPOINT_URL] ?: TranslationConfig.DEFAULT_LIBRE_ENDPOINT,
             libreApiKey = prefs[Keys.LIBRE_API_KEY] ?: ""
         )
+    }
+
+    private fun matchesLegacyKeyProvider(
+        legacyKey: String,
+        candidate: AiProviderPreset,
+        savedPreset: AiProviderPreset
+    ): Boolean {
+        return when {
+            legacyKey.startsWith("gsk_") -> candidate == AiProviderPreset.GROQ
+            legacyKey.startsWith("csk-") -> candidate == AiProviderPreset.CEREBRAS
+            legacyKey.startsWith("sk-or-") -> candidate == AiProviderPreset.OPENROUTER
+            legacyKey.startsWith("AIza") -> candidate == AiProviderPreset.GEMINI
+            else -> candidate == savedPreset
+        }
     }
 
     fun observeRoi(screenWidth: Int, screenHeight: Int): Flow<RoiRect> =
@@ -201,21 +268,34 @@ class SettingsDataStore(private val context: Context) {
     suspend fun updateAiPreset(preset: AiProviderPreset) {
         context.dataStore.edit { prefs ->
             prefs[Keys.AI_PRESET] = preset.name
-            prefs[Keys.AI_ENDPOINT_URL] = preset.defaultBaseUrl
-            prefs[Keys.AI_MODEL_NAME] = preset.defaultModel
+            val savedModel = AiProviderPreset.sanitizeModelId(preset, prefs[Keys.modelFor(preset)])
+            val savedEndpoint = prefs[Keys.endpointFor(preset)]?.takeIf { it.isNotBlank() }
+                ?: preset.defaultBaseUrl
+            prefs[Keys.AI_MODEL_NAME] = savedModel
+            prefs[Keys.AI_ENDPOINT_URL] = savedEndpoint
         }
     }
 
-    suspend fun updateAiApiKey(apiKey: String) {
-        context.dataStore.edit { it[Keys.AI_API_KEY] = apiKey }
+    suspend fun updateAiApiKey(preset: AiProviderPreset, apiKey: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.apiKeyFor(preset)] = apiKey
+            prefs.remove(Keys.LEGACY_AI_API_KEY)
+        }
     }
 
-    suspend fun updateAiEndpointUrl(endpointUrl: String) {
-        context.dataStore.edit { it[Keys.AI_ENDPOINT_URL] = endpointUrl }
+    suspend fun updateAiEndpointUrl(preset: AiProviderPreset, endpointUrl: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.endpointFor(preset)] = endpointUrl
+            prefs[Keys.AI_ENDPOINT_URL] = endpointUrl
+        }
     }
 
-    suspend fun updateAiModelName(modelName: String) {
-        context.dataStore.edit { it[Keys.AI_MODEL_NAME] = modelName }
+    suspend fun updateAiModelName(preset: AiProviderPreset, modelName: String) {
+        context.dataStore.edit { prefs ->
+            val sanitized = AiProviderPreset.sanitizeModelId(preset, modelName)
+            prefs[Keys.modelFor(preset)] = sanitized
+            prefs[Keys.AI_MODEL_NAME] = sanitized
+        }
     }
 
     suspend fun updateLibreEndpointUrl(url: String) {

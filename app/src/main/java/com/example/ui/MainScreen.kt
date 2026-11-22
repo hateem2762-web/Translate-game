@@ -152,6 +152,7 @@ fun MainScreen(
     onAiApiKeyChange: (String) -> Unit,
     onAiModelChange: (String) -> Unit,
     onAiEndpointChange: (String) -> Unit,
+    onRefreshAiModelsClick: () -> Unit,
     onLibreEndpointChange: (String) -> Unit,
     onLibreApiKeyChange: (String) -> Unit,
     onTestAiConnectionClick: () -> Unit,
@@ -301,6 +302,7 @@ fun MainScreen(
                             onAiApiKeyChange = onAiApiKeyChange,
                             onAiModelChange = onAiModelChange,
                             onAiEndpointChange = onAiEndpointChange,
+                            onRefreshAiModelsClick = onRefreshAiModelsClick,
                             onLibreEndpointChange = onLibreEndpointChange,
                             onLibreApiKeyChange = onLibreApiKeyChange,
                             onTestAiConnectionClick = onTestAiConnectionClick
@@ -553,7 +555,7 @@ private fun LaunchControlCard(
             } else if ((uiState.config.engineMode == TranslationEngineMode.SMART_AI ||
                     uiState.config.engineMode == TranslationEngineMode.HYBRID) &&
                 uiState.config.aiPreset.requiresUserApiKey &&
-                uiState.config.aiApiKey.isBlank()
+                uiState.config.apiKeyFor(uiState.config.aiPreset).isBlank()
             ) {
                 WarningBanner("${uiState.config.aiPreset.shortLabelTr} seçili: Aşağıdaki Motor kartından API anahtarı girin.")
             } else if (uiState.config.engineMode == TranslationEngineMode.LIBRETRANSLATE &&
@@ -652,6 +654,7 @@ private fun DisplayAndEngineModeCard(
     onAiApiKeyChange: (String) -> Unit,
     onAiModelChange: (String) -> Unit,
     onAiEndpointChange: (String) -> Unit,
+    onRefreshAiModelsClick: () -> Unit,
     onLibreEndpointChange: (String) -> Unit,
     onLibreApiKeyChange: (String) -> Unit,
     onTestAiConnectionClick: () -> Unit
@@ -985,7 +988,7 @@ private fun DisplayAndEngineModeCard(
                             style = MaterialTheme.typography.labelLarge,
                             color = AmberTertiary
                         )
-                        val isReadyBadge = uiState.config.aiApiKey.isNotBlank()
+                        val isReadyBadge = aiApiKeyDraft.isNotBlank()
                         if (isReadyBadge) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
@@ -996,7 +999,7 @@ private fun DisplayAndEngineModeCard(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = "Anahtar Kaydedildi",
+                                    text = "${uiState.config.aiPreset.shortLabelTr} Anahtarı Kayıtlı",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = EmeraldSuccess
                                 )
@@ -1036,20 +1039,15 @@ private fun DisplayAndEngineModeCard(
                     val isGeminiPreset = !activePreset.requiresUserApiKey
                     val presetInfoText = when (activePreset) {
                         AiProviderPreset.GROQ ->
-                            "Groq: Ücretsiz katmanda ~150–350ms ultra hızlı yanıt. Önerilen: llama-3.3-70b-versatile veya qwen-qwq-32b."
+                            "Groq: Ücretsiz katmanda ~150–350ms yanıt. Güncel modeller: openai/gpt-oss-20b ve qwen/qwen3.8-27b."
                         AiProviderPreset.CEREBRAS ->
-                            "Cerebras: Ücretsiz katmanda saniyede 2000+ token hızında sıfıra yakın gecikme (llama-3.3-70b)."
+                            "Cerebras: Saniyede 2000+ token hızında sıfıra yakın gecikme (gpt-oss-120b, qwen-3.8-27b)."
                         AiProviderPreset.OPENROUTER ->
                             "OpenRouter: Ücretsiz (:free) veya ücretli yüzlerce model tek anahtarla."
-                        AiProviderPreset.GEMINI_FLASH -> if (aiApiKeyDraft.isNotBlank()) {
-                            "Gemini Flash: Düşünme bütçesi (thinkingBudget=0) kapalı, minimum gecikme modu aktif."
+                        AiProviderPreset.GEMINI -> if (aiApiKeyDraft.isNotBlank()) {
+                            "Gemini: Düşünme bütçesi (thinkingBudget=0) kapalı, minimum gecikme (gemini-2.5-flash-lite / 2.5-flash)."
                         } else {
-                            "Firebase AI Logic hazır (google-services.json yapılandırıldı). API anahtarı eklerseniz thinkingBudget=0 modu da aktif olur."
-                        }
-                        AiProviderPreset.GEMINI_LITE -> if (aiApiKeyDraft.isNotBlank()) {
-                            "Gemini Flash-Lite: Düşünme=0 + en yüksek ücretsiz kota verimliliği."
-                        } else {
-                            "Firebase AI Logic Flash-Lite hazır. %92 benzerlik önbelleği + titreşim koruması aktif."
+                            "Firebase AI Logic hazır. Kendi Gemini API anahtarınızı eklerseniz thinkingBudget=0 ve model yenileme aktif olur."
                         }
                         AiProviderPreset.OPENAI_COMPATIBLE ->
                             "OpenAI uyumlu herhangi bir yerel veya bulut Chat Completions uç noktasını bağlayın."
@@ -1087,12 +1085,11 @@ private fun DisplayAndEngineModeCard(
                         label = {
                             Text(
                                 when (activePreset) {
-                                    AiProviderPreset.GROQ -> "Groq API Anahtarı (gsk_...)"
-                                    AiProviderPreset.CEREBRAS -> "Cerebras API Anahtarı (csk-...)"
-                                    AiProviderPreset.OPENROUTER -> "OpenRouter API Anahtarı (sk-or-...)"
-                                    AiProviderPreset.GEMINI_FLASH,
-                                    AiProviderPreset.GEMINI_LITE -> "Gemini API Anahtarı (isteğe bağlı, önerilir)"
-                                    AiProviderPreset.OPENAI_COMPATIBLE -> "API Anahtarı (anında kaydedilir)"
+                                    AiProviderPreset.GROQ -> "Groq API Anahtarı (yalnızca Groq'a özel)"
+                                    AiProviderPreset.CEREBRAS -> "Cerebras API Anahtarı (yalnızca Cerebras'a özel)"
+                                    AiProviderPreset.OPENROUTER -> "OpenRouter API Anahtarı (yalnızca OpenRouter'a özel)"
+                                    AiProviderPreset.GEMINI -> "Gemini API Anahtarı (yalnızca Gemini'a özel)"
+                                    AiProviderPreset.OPENAI_COMPATIBLE -> "Özel Sağlayıcı API Anahtarı"
                                 }
                             )
                         },
@@ -1102,8 +1099,7 @@ private fun DisplayAndEngineModeCard(
                                     AiProviderPreset.GROQ -> "gsk_..."
                                     AiProviderPreset.CEREBRAS -> "csk-..."
                                     AiProviderPreset.OPENROUTER -> "sk-or-v1-..."
-                                    AiProviderPreset.GEMINI_FLASH,
-                                    AiProviderPreset.GEMINI_LITE -> "AIza..."
+                                    AiProviderPreset.GEMINI -> "AIza..."
                                     AiProviderPreset.OPENAI_COMPATIBLE -> "sk-..."
                                 }
                             )
@@ -1135,54 +1131,127 @@ private fun DisplayAndEngineModeCard(
                             .testTag("ai_api_key_input")
                     )
 
-                    OutlinedTextField(
-                        value = aiModelDraft,
-                        onValueChange = onAiModelChange,
-                        label = { Text("Model Kimliği") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("ai_model_input")
-                    )
-
-                    val quickModels = when (activePreset) {
-                        AiProviderPreset.GROQ -> listOf(
-                            "llama-3.3-70b-versatile",
-                            "qwen-qwq-32b",
-                            "llama-3.1-8b-instant"
-                        )
-                        AiProviderPreset.CEREBRAS -> listOf(
-                            "llama-3.3-70b",
-                            "llama3.1-8b",
-                            "qwen-3-32b"
-                        )
-                        AiProviderPreset.OPENROUTER -> listOf(
-                            "meta-llama/llama-3.3-70b-instruct:free",
-                            "google/gemini-2.0-flash-exp:free"
-                        )
-                        else -> emptyList()
+                    // Touch-only Model Dropdown + Live Refresh Button
+                    val catalogState = uiState.modelCatalogState
+                    val availableModels = remember(activePreset, catalogState.modelsByPreset, aiModelDraft) {
+                        val base = catalogState.modelsByPreset[activePreset] ?: activePreset.curatedModels
+                        if (aiModelDraft.isNotBlank() && base.none { it.id == aiModelDraft }) {
+                            listOf(com.example.model.AiModelOption(aiModelDraft, aiModelDraft)) + base
+                        } else {
+                            base
+                        }
                     }
-                    if (quickModels.isNotEmpty()) {
-                        FlowRow(
+                    val selectedOption = availableModels.firstOrNull { it.id == aiModelDraft }
+                        ?: availableModels.first()
+                    var modelMenuExpanded by remember(activePreset) { mutableStateOf(false) }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Model Seçimi (Dokunarak Seç)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            quickModels.forEach { modelId ->
-                                FilterChip(
-                                    selected = aiModelDraft == modelId,
-                                    onClick = { onAiModelChange(modelId) },
-                                    label = {
-                                        Text(
-                                            text = modelId,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            maxLines = 1
+                            Box(modifier = Modifier.weight(1f)) {
+                                OutlinedButton(
+                                    onClick = { modelMenuExpanded = true },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 52.dp)
+                                        .testTag("ai_model_dropdown"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, ObsidianOutline),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+                                ) {
+                                    Text(
+                                        text = selectedOption.label,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "▼",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = AmberTertiary
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = modelMenuExpanded,
+                                    onDismissRequest = { modelMenuExpanded = false }
+                                ) {
+                                    availableModels.forEach { option ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    text = option.label,
+                                                    fontWeight = if (option.id == aiModelDraft) {
+                                                        FontWeight.SemiBold
+                                                    } else {
+                                                        FontWeight.Normal
+                                                    },
+                                                    color = if (option.id == aiModelDraft) {
+                                                        AmberTertiary
+                                                    } else {
+                                                        MaterialTheme.colorScheme.onSurface
+                                                    }
+                                                )
+                                            },
+                                            onClick = {
+                                                modelMenuExpanded = false
+                                                onAiModelChange(option.id)
+                                            },
+                                            modifier = Modifier.testTag("ai_model_option_${option.id}")
                                         )
-                                    },
-                                    modifier = Modifier.heightIn(min = 48.dp)
-                                )
+                                    }
+                                }
                             }
+
+                            OutlinedButton(
+                                onClick = onRefreshAiModelsClick,
+                                enabled = !catalogState.isFetching && aiApiKeyDraft.isNotBlank(),
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .testTag("refresh_models_button"),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, AmberTertiary.copy(alpha = 0.55f)),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                if (catalogState.isFetching) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                        color = AmberTertiary
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Refresh,
+                                        contentDescription = "Modelleri Getir / Yenile",
+                                        tint = AmberTertiary
+                                    )
+                                }
+                            }
+                        }
+
+                        catalogState.statusMessage?.let { okMsg ->
+                            Text(
+                                text = okMsg,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = EmeraldSuccess
+                            )
+                        }
+                        catalogState.errorMessage?.let { errMsg ->
+                            Text(
+                                text = errMsg,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
                         }
                     }
 

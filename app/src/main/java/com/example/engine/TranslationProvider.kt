@@ -3,6 +3,7 @@ package com.example.engine
 import android.content.Context
 import android.util.Log
 import com.example.ai.ensureFirebaseInitialized
+import com.example.model.AiModelOption
 import com.example.model.AiProviderPreset
 import com.example.model.SupportedLanguage
 import com.example.model.TranslationConfig
@@ -66,7 +67,7 @@ class SmartAiTranslationProvider(
 
     private val geminiFlashModel by lazy {
         Firebase.ai.generativeModel(
-            modelName = AiProviderPreset.GEMINI_FLASH.defaultModel,
+            modelName = "gemini-2.5-flash",
             generationConfig = generationConfig {
                 temperature = 0.2f
                 maxOutputTokens = MAX_OUTPUT_TOKENS
@@ -76,7 +77,7 @@ class SmartAiTranslationProvider(
 
     private val geminiLiteModel by lazy {
         Firebase.ai.generativeModel(
-            modelName = AiProviderPreset.GEMINI_LITE.defaultModel,
+            modelName = "gemini-2.5-flash-lite",
             generationConfig = generationConfig {
                 temperature = 0.2f
                 maxOutputTokens = MAX_OUTPUT_TOKENS
@@ -103,20 +104,79 @@ class SmartAiTranslationProvider(
     }
 
     override suspend fun isReady(config: TranslationConfig): Boolean {
+        val isolatedKey = config.apiKeyFor(config.aiPreset).trim()
         return when (config.aiPreset) {
-            AiProviderPreset.GEMINI_FLASH,
-            AiProviderPreset.GEMINI_LITE ->
-                config.aiApiKey.isNotBlank() || ensureFirebaseInitialized(appContext)
+            AiProviderPreset.GEMINI ->
+                isolatedKey.isNotBlank() || ensureFirebaseInitialized(appContext)
             AiProviderPreset.GROQ,
             AiProviderPreset.CEREBRAS,
             AiProviderPreset.OPENROUTER,
             AiProviderPreset.OPENAI_COMPATIBLE ->
-                config.aiApiKey.isNotBlank() && isValidHttpsUrl(resolveChatEndpoint(config))
+                isolatedKey.isNotBlank() && isValidHttpsUrl(resolveChatEndpoint(config))
         }
     }
 
     suspend fun testConnection(text: String, config: TranslationConfig): String {
         return translateInternal(text, config, bypassCooldown = true)
+    }
+
+    /**
+     * Fetches live available models from the active provider's `/models` endpoint using its
+     * isolated API key, merged cleanly with curated default options.
+     */
+    suspend fun fetchAvailableModels(config: TranslationConfig): List<AiModelOption> {
+        val preset = config.aiPreset
+        val apiKey = config.apiKeyFor(preset).trim()
+        if (apiKey.isEmpty()) {
+            throw IllegalStateException("${preset.shortLabelTr} modellerini getirmek için önce API anahtarını girin.")
+        }
+
+        return withContext(Dispatchers.IO) {
+            when (preset) {
+                AiProviderPreset.GEMINI -> {
+                    val req = Request.Builder()
+                        .url("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100")
+                        .addHeader("x-goog-api-key", apiKey)
+                        .get()
+                        .build()
+                    geminiRestClient.newCall(req).execute().use { resp ->
+                        val raw = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) {
+                            val apiMsg = runCatching {
+                                JSONObject(raw).optJSONObject("error")?.optString("message")
+                            }.getOrNull()
+                            throw IOException(
+                                "Gemini model listesi alınamadı (${resp.code}): ${apiMsg.orEmpty()}".trim()
+                            )
+                        }
+                        parseGeminiModelsJson(raw, preset)
+                    }
+                }
+                AiProviderPreset.GROQ,
+                AiProviderPreset.CEREBRAS,
+                AiProviderPreset.OPENROUTER,
+                AiProviderPreset.OPENAI_COMPATIBLE -> {
+                    val modelsUrl = resolveModelsEndpoint(config)
+                    if (!isValidHttpsUrl(modelsUrl)) {
+                        throw IllegalArgumentException("Geçerli bir HTTPS uç noktası girin.")
+                    }
+                    val reqBuilder = Request.Builder()
+                        .url(modelsUrl)
+                        .addHeader("Authorization", "Bearer $apiKey")
+                        .get()
+                    if (modelsUrl.contains("openrouter.ai", ignoreCase = true)) {
+                        reqBuilder.addHeader("X-Title", "SubLens")
+                    }
+                    client.newCall(reqBuilder.build()).execute().use { resp ->
+                        val raw = resp.body?.string().orEmpty()
+                        if (!resp.isSuccessful) {
+                            throw IOException(extractApiError(resp.code, raw))
+                        }
+                        parseOpenAiModelsJson(raw, preset)
+                    }
+                }
+            }
+        }
     }
 
     override suspend fun translate(text: String, config: TranslationConfig): String {
@@ -157,71 +217,58 @@ class SmartAiTranslationProvider(
         userContent: String,
         config: TranslationConfig
     ): String {
+        val isolatedApiKey = config.apiKeyFor(config.aiPreset).trim()
         return when (config.aiPreset) {
-            AiProviderPreset.GEMINI_FLASH -> callGemini(
+            AiProviderPreset.GEMINI -> callGemini(
                 systemPrompt = systemPrompt,
                 text = userContent,
-                preferLite = false,
-                config = config
-            )
-            AiProviderPreset.GEMINI_LITE -> callGemini(
-                systemPrompt = systemPrompt,
-                text = userContent,
-                preferLite = true,
-                config = config
+                apiKey = isolatedApiKey,
+                modelId = AiProviderPreset.sanitizeModelId(AiProviderPreset.GEMINI, config.aiModelName)
             )
             AiProviderPreset.GROQ,
             AiProviderPreset.CEREBRAS,
             AiProviderPreset.OPENROUTER,
             AiProviderPreset.OPENAI_COMPATIBLE -> {
-                val apiKey = config.aiApiKey.trim()
-                if (apiKey.isEmpty()) {
+                if (isolatedApiKey.isEmpty()) {
                     throw IllegalStateException("${config.aiPreset.shortLabelTr} için API anahtarı girin.")
                 }
                 val endpoint = resolveChatEndpoint(config)
                 if (!isValidHttpsUrl(endpoint)) {
                     throw IllegalArgumentException("Geçerli bir HTTPS API uç noktası girin.")
                 }
-                val model = config.aiModelName.trim().ifEmpty { config.aiPreset.defaultModel }
+                val model = AiProviderPreset.sanitizeModelId(config.aiPreset, config.aiModelName)
                 withContext(Dispatchers.IO) {
-                    callOpenAiCompatible(endpoint, model, apiKey, systemPrompt, userContent)
+                    callOpenAiCompatible(endpoint, model, isolatedApiKey, systemPrompt, userContent)
                 }
             }
         }
     }
 
-    /**
-     * Gemini entry point. With an API key, calls the Gemini REST API directly with `thinkingBudget: 0`
-     * for minimum latency. Without a key, routes via Firebase AI Logic + App Check.
-     */
     private suspend fun callGemini(
         systemPrompt: String,
         text: String,
-        preferLite: Boolean,
-        config: TranslationConfig
+        apiKey: String,
+        modelId: String
     ): String {
-        val apiKey = config.aiApiKey.trim()
         if (apiKey.isNotEmpty()) {
-            return callGeminiRest(systemPrompt, text, preferLite, apiKey, config)
+            return callGeminiRest(systemPrompt, text, apiKey, modelId)
         }
+        val preferLite = modelId.contains("lite", ignoreCase = true)
         return callFirebaseGemini(systemPrompt, text, preferLite)
     }
 
     private suspend fun callGeminiRest(
         systemPrompt: String,
         text: String,
-        preferLite: Boolean,
         apiKey: String,
-        config: TranslationConfig
+        model: String
     ): String {
-        val preset = if (preferLite) AiProviderPreset.GEMINI_LITE else AiProviderPreset.GEMINI_FLASH
-        val model = config.aiModelName.trim().ifEmpty { preset.defaultModel }
+        val preferLite = model.contains("lite", ignoreCase = true)
         try {
             return withContext(Dispatchers.IO) {
                 try {
                     requestGeminiRest(model, apiKey, systemPrompt, text, disableThinking = true)
                 } catch (e: IOException) {
-                    // Fallback gracefully if a custom Gemini model ID rejects thinkingConfig
                     if (e.message?.contains("thinking", ignoreCase = true) == true) {
                         requestGeminiRest(model, apiKey, systemPrompt, text, disableThinking = false)
                     } else {
@@ -232,7 +279,7 @@ class SmartAiTranslationProvider(
         } catch (e: CancellationException) {
             throw e
         } catch (e: AiQuotaExceededException) {
-            val liteModel = AiProviderPreset.GEMINI_LITE.defaultModel
+            val liteModel = AiProviderPreset.GEMINI.defaultModel
             if (!preferLite && model != liteModel) {
                 Log.w(TAG, "$model quota hit, falling back to $liteModel")
                 return withContext(Dispatchers.IO) {
@@ -298,7 +345,7 @@ class SmartAiTranslationProvider(
                         "Gemini API isteği/anahtarı reddedildi (${response.code}): ${apiMsg.orEmpty()}".trim()
                     )
                     404 -> throw IOException(
-                        "Gemini modeli bulunamadı: \"$model\". Model Kimliği alanına geçerli bir model yazın (ör. gemini-2.5-flash)."
+                        "Gemini modeli bulunamadı: \"$model\". Modelleri Yenile butonuna basıp güncel bir model seçin."
                     )
                     else -> throw IOException("Gemini API hatası (${response.code}): ${apiMsg.orEmpty()}".trim())
                 }
@@ -344,7 +391,7 @@ class SmartAiTranslationProvider(
             throw e
         } catch (e: Exception) {
             if (!preferLite && isQuotaError(e)) {
-                Log.w(TAG, "gemini-3.8-flash quota hit, falling back to gemini-3.5-flash-lite", e)
+                Log.w(TAG, "gemini-2.5-flash quota hit, falling back to gemini-2.5-flash-lite", e)
                 try {
                     return generateWithModel(geminiLiteModel, prompt)
                 } catch (fallbackEx: CancellationException) {
@@ -518,6 +565,10 @@ class SmartAiTranslationProvider(
         const val MAX_OUTPUT_TOKENS = 120
         private const val QUOTA_COOLDOWN_MS = 45_000L
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private val NON_TEXT_MODEL_KEYWORDS = listOf(
+            "whisper", "tts", "embed", "moderation", "guard", "safeguard",
+            "orpheus", "imagen", "veo", "aqa"
+        )
 
         fun buildSystemPrompt(targetLangTr: String, isBatch: Boolean): String {
             return if (isBatch) {
@@ -532,10 +583,83 @@ class SmartAiTranslationProvider(
             if (raw.isEmpty() || raw == "firebase-ai-logic") return raw
             return when {
                 raw.endsWith("/chat/completions", ignoreCase = true) -> raw
-                raw.endsWith("/v1", ignoreCase = true) || raw.endsWith("/openai/v1", ignoreCase = true) || raw.endsWith("/api/v1", ignoreCase = true) ->
+                raw.endsWith("/v1", ignoreCase = true) ||
+                    raw.endsWith("/openai/v1", ignoreCase = true) ||
+                    raw.endsWith("/api/v1", ignoreCase = true) ->
                     "$raw/chat/completions"
                 else -> raw
             }
+        }
+
+        fun resolveModelsEndpoint(config: TranslationConfig): String {
+            if (config.aiPreset == AiProviderPreset.GEMINI) {
+                return "https://generativelanguage.googleapis.com/v1beta/models"
+            }
+            val chat = resolveChatEndpoint(config).trimEnd('/')
+            return when {
+                chat.endsWith("/chat/completions", ignoreCase = true) ->
+                    chat.removeSuffix("/chat/completions") + "/models"
+                chat.endsWith("/completions", ignoreCase = true) ->
+                    chat.removeSuffix("/completions") + "/models"
+                chat.endsWith("/models", ignoreCase = true) -> chat
+                else -> "$chat/models"
+            }
+        }
+
+        fun parseOpenAiModelsJson(rawJson: String, preset: AiProviderPreset): List<AiModelOption> {
+            val data = JSONObject(rawJson).optJSONArray("data") ?: return preset.curatedModels
+            val curatedById = preset.curatedModels.associateBy { it.id }
+            val fetchedIds = mutableListOf<String>()
+            for (i in 0 until data.length()) {
+                val id = data.optJSONObject(i)?.optString("id")?.trim().orEmpty()
+                if (id.isEmpty()) continue
+                if (id in AiProviderPreset.DEPRECATED_MODEL_IDS) continue
+                val lower = id.lowercase()
+                if (NON_TEXT_MODEL_KEYWORDS.any { lower.contains(it) }) continue
+                fetchedIds.add(id)
+            }
+            val merged = LinkedHashMap<String, AiModelOption>()
+            preset.curatedModels.forEach { merged[it.id] = it }
+            fetchedIds.sorted().forEach { id ->
+                if (!merged.containsKey(id)) {
+                    merged[id] = curatedById[id] ?: AiModelOption(id = id, label = id)
+                }
+            }
+            return merged.values.toList()
+        }
+
+        fun parseGeminiModelsJson(rawJson: String, preset: AiProviderPreset): List<AiModelOption> {
+            val models = JSONObject(rawJson).optJSONArray("models") ?: return preset.curatedModels
+            val curatedById = preset.curatedModels.associateBy { it.id }
+            val fetchedIds = mutableListOf<String>()
+            for (i in 0 until models.length()) {
+                val obj = models.optJSONObject(i) ?: continue
+                val methods = obj.optJSONArray("supportedGenerationMethods")
+                var supportsGenerate = false
+                if (methods != null) {
+                    for (m in 0 until methods.length()) {
+                        if (methods.optString(m) == "generateContent") {
+                            supportsGenerate = true
+                            break
+                        }
+                    }
+                }
+                if (!supportsGenerate) continue
+                val rawName = obj.optString("name").trim()
+                val id = rawName.removePrefix("models/")
+                if (id.isEmpty() || id in AiProviderPreset.DEPRECATED_MODEL_IDS) continue
+                val lower = id.lowercase()
+                if (NON_TEXT_MODEL_KEYWORDS.any { lower.contains(it) }) continue
+                fetchedIds.add(id)
+            }
+            val merged = LinkedHashMap<String, AiModelOption>()
+            preset.curatedModels.forEach { merged[it.id] = it }
+            fetchedIds.sorted().forEach { id ->
+                if (!merged.containsKey(id)) {
+                    merged[id] = curatedById[id] ?: AiModelOption(id = id, label = id)
+                }
+            }
+            return merged.values.toList()
         }
     }
 }

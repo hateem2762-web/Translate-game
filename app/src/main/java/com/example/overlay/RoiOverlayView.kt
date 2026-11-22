@@ -120,6 +120,8 @@ class RoiOverlayView(
 
     fun setInPlaceStealth(hidden: Boolean) {
         inPlaceLayer.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
+        inPlaceLayer.alpha = if (hidden) 0f else 1f
+        inPlaceLayer.invalidate()
     }
 
     /**

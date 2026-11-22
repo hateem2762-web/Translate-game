@@ -123,6 +123,7 @@ class MainActivity : ComponentActivity() {
                     onAiApiKeyChange = { viewModel.onAiApiKeyChanged(it) },
                     onAiModelChange = { viewModel.onAiModelChanged(it) },
                     onAiEndpointChange = { viewModel.onAiEndpointChanged(it) },
+                    onRefreshAiModelsClick = { viewModel.refreshAiModels() },
                     onLibreEndpointChange = { viewModel.onLibreEndpointChanged(it) },
                     onLibreApiKeyChange = { viewModel.onLibreApiKeyChanged(it) },
                     onTestAiConnectionClick = { viewModel.testAiConnection() },

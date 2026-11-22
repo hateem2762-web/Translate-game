@@ -303,14 +303,14 @@ class ScreenTranslatorService : Service() {
                 if (!isPaused && !overlayController.isHistoryVisible()) {
                     val roi = overlayController.getActiveCaptureRoi()
                     val croppedBitmap = if (isInPlaceWithActiveMask) {
-                        // Drain stale buffered image, hide mask for ~1 single frame, grab clean frame, restore immediately
+                        // Drain stale frames, hide In-Place mask (~34ms pulse), capture clean game frame, restore immediately
                         captureManager.drainPendingFrame()
                         overlayController.setInPlaceStealth(true)
                         try {
                             captureManager.awaitAndCaptureStealthRoi(
                                 roi = roi,
-                                minSettleMs = 18L,
-                                maxWaitMs = 45L
+                                minSettleMs = 34L,
+                                maxWaitMs = 75L
                             )
                         } finally {
                             overlayController.setInPlaceStealth(false)
@@ -326,10 +326,10 @@ class ScreenTranslatorService : Service() {
                     }
                 }
 
-                val loopDelay = if (isInPlaceWithActiveMask) {
-                    maxOf(currentConfig.scanIntervalMs, 550L)
-                } else {
-                    currentConfig.scanIntervalMs.coerceIn(150L, 1200L)
+                val loopDelay = when {
+                    isInPlaceWithActiveMask && pipeline.isAwaitingBlankClear() -> 120L
+                    isInPlaceWithActiveMask -> maxOf(currentConfig.scanIntervalMs, 420L)
+                    else -> currentConfig.scanIntervalMs.coerceIn(150L, 1200L)
                 }
                 delay(loopDelay)
             }

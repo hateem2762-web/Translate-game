@@ -648,4 +648,140 @@ class SubtitlePipelineTest {
             com.example.engine.SmartAiTranslationProvider.buildSystemPrompt("Türkçe", isBatch = false)
         )
     }
+
+    @Test
+    fun `per-provider API key isolation keeps Groq Cerebras Gemini and Custom keys separate`() {
+        val config = TranslationConfig(
+            aiPreset = com.example.model.AiProviderPreset.GROQ,
+            aiApiKey = "gsk_groq_secret",
+            aiApiKeys = mapOf(
+                com.example.model.AiProviderPreset.GROQ to "gsk_groq_secret",
+                com.example.model.AiProviderPreset.CEREBRAS to "csk-cerebras-secret",
+                com.example.model.AiProviderPreset.GEMINI to "AIzaGeminiSecret",
+                com.example.model.AiProviderPreset.OPENAI_COMPATIBLE to "sk-custom-secret"
+            )
+        )
+
+        assertEquals("gsk_groq_secret", config.apiKeyFor(com.example.model.AiProviderPreset.GROQ))
+        assertEquals("csk-cerebras-secret", config.apiKeyFor(com.example.model.AiProviderPreset.CEREBRAS))
+        assertEquals("AIzaGeminiSecret", config.apiKeyFor(com.example.model.AiProviderPreset.GEMINI))
+        assertEquals("sk-custom-secret", config.apiKeyFor(com.example.model.AiProviderPreset.OPENAI_COMPATIBLE))
+        assertEquals("", config.apiKeyFor(com.example.model.AiProviderPreset.OPENROUTER))
+    }
+
+    @Test
+    fun `deprecated model IDs sanitize to current defaults and legacy Gemini presets migrate`() {
+        val groq = com.example.model.AiProviderPreset.GROQ
+        val cerebras = com.example.model.AiProviderPreset.CEREBRAS
+        val gemini = com.example.model.AiProviderPreset.GEMINI
+
+        assertEquals("openai/gpt-oss-20b", groq.defaultModel)
+        assertEquals("gpt-oss-120b", cerebras.defaultModel)
+        assertEquals("gemini-2.5-flash-lite", gemini.defaultModel)
+
+        assertEquals("openai/gpt-oss-20b", com.example.model.AiProviderPreset.sanitizeModelId(groq, "llama-3.1-8b-instant"))
+        assertEquals("openai/gpt-oss-20b", com.example.model.AiProviderPreset.sanitizeModelId(groq, "llama-3.3-70b-versatile"))
+        assertEquals("openai/gpt-oss-20b", com.example.model.AiProviderPreset.sanitizeModelId(groq, "qwen-qwq-32b"))
+        assertEquals("gpt-oss-120b", com.example.model.AiProviderPreset.sanitizeModelId(cerebras, "llama-3.3-70b"))
+        assertEquals("gemini-2.5-flash-lite", com.example.model.AiProviderPreset.sanitizeModelId(gemini, "gemini-3.8-flash"))
+        assertEquals("gemini-2.5-flash-lite", com.example.model.AiProviderPreset.sanitizeModelId(gemini, "gemini-3.5-flash-lite"))
+        assertEquals("qwen/qwen3.8-27b", com.example.model.AiProviderPreset.sanitizeModelId(groq, "qwen/qwen3.8-27b"))
+
+        assertEquals(gemini, com.example.model.AiProviderPreset.fromPersistedName("GEMINI_FLASH"))
+        assertEquals(gemini, com.example.model.AiProviderPreset.fromPersistedName("GEMINI_LITE"))
+    }
+
+    @Test
+    fun `resolveModelsEndpoint maps provider chat endpoints to live models URLs`() {
+        assertEquals(
+            "https://api.groq.com/openai/v1/models",
+            com.example.engine.SmartAiTranslationProvider.resolveModelsEndpoint(
+                TranslationConfig(aiPreset = com.example.model.AiProviderPreset.GROQ)
+            )
+        )
+        assertEquals(
+            "https://api.cerebras.ai/v1/models",
+            com.example.engine.SmartAiTranslationProvider.resolveModelsEndpoint(
+                TranslationConfig(aiPreset = com.example.model.AiProviderPreset.CEREBRAS)
+            )
+        )
+        assertEquals(
+            "https://openrouter.ai/api/v1/models",
+            com.example.engine.SmartAiTranslationProvider.resolveModelsEndpoint(
+                TranslationConfig(aiPreset = com.example.model.AiProviderPreset.OPENROUTER)
+            )
+        )
+        assertEquals(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            com.example.engine.SmartAiTranslationProvider.resolveModelsEndpoint(
+                TranslationConfig(aiPreset = com.example.model.AiProviderPreset.GEMINI)
+            )
+        )
+        assertEquals(
+            "https://my-proxy.example.com/v1/models",
+            com.example.engine.SmartAiTranslationProvider.resolveModelsEndpoint(
+                TranslationConfig(
+                    aiPreset = com.example.model.AiProviderPreset.OPENAI_COMPATIBLE,
+                    aiEndpointUrl = "https://my-proxy.example.com/v1"
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `self OCR guard rejects 85pct similar Turkish overlay text and auto clear wipes blur state`() = runTest {
+        val ai = object : TranslationProvider {
+            override val mode: TranslationEngineMode = TranslationEngineMode.SMART_AI
+            var calls = 0
+            override suspend fun isReady(config: TranslationConfig): Boolean = true
+            override suspend fun translate(text: String, config: TranslationConfig): String {
+                calls++
+                return "Antik mühür kırılıyor, karanlık köyü yutmadan önce anahtarı bul!"
+            }
+            override fun close() = Unit
+        }
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(TranslationEngineMode.SMART_AI to ai),
+            cacheStore = InMemoryCacheStore()
+        )
+        val config = TranslationConfig(
+            debounceMs = 200L,
+            displayMode = DisplayMode.IN_PLACE_BLUR,
+            engineMode = TranslationEngineMode.SMART_AI
+        )
+
+        pipeline.processRecognizedResult(
+            simpleResult("The ancient seal is breaking, find the key before darkness consumes the village!"),
+            null,
+            config
+        )
+        advanceTimeBy(200L)
+        runCurrent()
+        assertEquals(1, ai.calls)
+        assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+        assertFalse(pipeline.isAwaitingBlankClear())
+
+        // Minor OCR variation (>= 85% match) of our own Turkish blur text must be rejected without calling AI
+        pipeline.processRecognizedResult(
+            simpleResult("Antik mühür kırılıyor, karanlık köyü yutmadan önce anahtarı buI!"),
+            null,
+            config
+        )
+        advanceTimeBy(400L)
+        runCurrent()
+        assertEquals(1, ai.calls)
+        assertEquals(1L, pipeline.output.value.framesSkipped)
+
+        // Blank frames trigger awaiting-clear state and wipe sourceText + translatedText + inPlaceBlocks at threshold 4
+        pipeline.processRecognizedResult(simpleResult(""), null, config)
+        assertTrue(pipeline.isAwaitingBlankClear())
+        repeat(3) { pipeline.processRecognizedResult(simpleResult(""), null, config) }
+
+        assertFalse(pipeline.isAwaitingBlankClear())
+        assertEquals("", pipeline.output.value.sourceText)
+        assertEquals("", pipeline.output.value.translatedText)
+        assertTrue(pipeline.output.value.inPlaceBlocks.isEmpty())
+    }
 }

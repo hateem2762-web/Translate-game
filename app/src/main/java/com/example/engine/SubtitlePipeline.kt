@@ -85,14 +85,18 @@ class SubtitlePipeline(
         lastTranslatedSource = ""
         lastRenderedTranslations.clear()
         lastRenderedCombined = ""
+        consecutiveBlankFrames = 0
         boxStabilizer.reset()
         _output.value = _output.value.copy(
+            sourceText = "",
             translatedText = "",
             inPlaceBlocks = emptyList(),
             isStabilizing = false,
             isAiRefining = false
         )
     }
+
+    fun isAwaitingBlankClear(): Boolean = consecutiveBlankFrames > 0
 
     suspend fun processFrame(bitmap: Bitmap, config: TranslationConfig) {
         val current = _output.value
@@ -128,8 +132,18 @@ class SubtitlePipeline(
 
         val blankClearThreshold = if (config.displayMode == DisplayMode.IN_PLACE_BLUR) 4 else 2
         if (normalized.isBlank()) {
+            val hasActiveContent = current.inPlaceBlocks.isNotEmpty() ||
+                current.translatedText.isNotBlank() ||
+                current.sourceText.isNotBlank() ||
+                debounceJob?.isActive == true
+            if (!hasActiveContent) {
+                consecutiveBlankFrames = 0
+                _output.value = current.copy(framesProcessed = current.framesProcessed + 1)
+                return
+            }
             consecutiveBlankFrames++
             if (consecutiveBlankFrames >= blankClearThreshold) {
+                consecutiveBlankFrames = 0
                 debounceJob?.cancel()
                 debounceJob = null
                 pendingCandidate = ""
@@ -141,6 +155,8 @@ class SubtitlePipeline(
                 boxStabilizer.reset()
                 if (config.displayMode == DisplayMode.IN_PLACE_BLUR && current.inPlaceBlocks.isNotEmpty()) {
                     _output.value = current.copy(
+                        sourceText = "",
+                        translatedText = "",
                         inPlaceBlocks = emptyList(),
                         isStabilizing = false,
                         isAiRefining = false,
@@ -148,6 +164,8 @@ class SubtitlePipeline(
                     )
                 } else {
                     _output.value = current.copy(
+                        sourceText = "",
+                        translatedText = "",
                         isStabilizing = false,
                         isAiRefining = false,
                         framesProcessed = current.framesProcessed + 1
@@ -804,24 +822,31 @@ class SubtitlePipeline(
     }
 
     private fun isSelfGeneratedOverlayText(normalizedOcr: String): Boolean {
-        val lower = normalizedOcr.lowercase()
-        if (lastRenderedCombined.isNotBlank() && lower == lastRenderedCombined) return true
-        if (lastRenderedTranslations.contains(lower)) return true
+        val lower = normalizedOcr.lowercase().trim()
+        if (lower.isEmpty()) return false
 
-        // Fuzzy check if OCR read a partial slice or minor variant of our own rendered overlay
-        if (lastRenderedCombined.length >= 6) {
-            if (lastRenderedCombined.contains(lower) || lower.contains(lastRenderedCombined)) {
-                val ratio = minOf(lower.length, lastRenderedCombined.length).toFloat() /
-                    maxOf(lower.length, lastRenderedCombined.length).toFloat()
-                if (ratio >= 0.68f) return true
+        val activeTranslated = _output.value.translatedText.trim().lowercase()
+        if (activeTranslated.isNotBlank()) {
+            if (lower == activeTranslated) return true
+            if (activeTranslated.length >= 5 &&
+                BoundingBoxStabilizer.textSimilarity(lower, activeTranslated) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD
+            ) {
+                return true
             }
-            if (BoundingBoxStabilizer.textSimilarity(lower, lastRenderedCombined) >= 0.72f) {
+        }
+
+        if (lastRenderedCombined.isNotBlank()) {
+            if (lower == lastRenderedCombined) return true
+            if (lastRenderedCombined.length >= 5 &&
+                BoundingBoxStabilizer.textSimilarity(lower, lastRenderedCombined) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD
+            ) {
                 return true
             }
         }
         for (renderedBlock in lastRenderedTranslations) {
-            if (renderedBlock.length >= 6 &&
-                BoundingBoxStabilizer.textSimilarity(lower, renderedBlock) >= 0.72f
+            if (lower == renderedBlock) return true
+            if (renderedBlock.length >= 5 &&
+                BoundingBoxStabilizer.textSimilarity(lower, renderedBlock) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD
             ) {
                 return true
             }
@@ -892,6 +917,7 @@ class SubtitlePipeline(
 
     companion object {
         private const val AI_MIN_REQUEST_INTERVAL_MS = 400L
+        private const val SELF_TRANSLATION_SIMILARITY_THRESHOLD = 0.85f
         private val MINOR_PUNCT_REGEX = Regex("[.,!?;:'\"`~•·]+")
 
         fun normalizeText(input: String, isChinese: Boolean = false): String {

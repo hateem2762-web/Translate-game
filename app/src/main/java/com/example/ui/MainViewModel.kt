@@ -22,6 +22,7 @@ import com.example.engine.MlKitTranslatorEngine
 import com.example.engine.OfflineMlKitTranslationProvider
 import com.example.engine.SmartAiTranslationProvider
 import com.example.engine.SubtitlePipeline
+import com.example.model.AiModelOption
 import com.example.model.AiProviderPreset
 import com.example.model.DisplayMode
 import com.example.model.InPlaceBlock
@@ -86,6 +87,13 @@ data class SandboxState(
     val errorMessage: String? = null
 )
 
+data class ModelCatalogState(
+    val modelsByPreset: Map<AiProviderPreset, List<AiModelOption>> = emptyMap(),
+    val isFetching: Boolean = false,
+    val statusMessage: String? = null,
+    val errorMessage: String? = null
+)
+
 data class MainUiState(
     val hasOverlayPermission: Boolean = false,
     val hasNotificationPermission: Boolean = true,
@@ -96,7 +104,8 @@ data class MainUiState(
     val cacheCount: Int = 0,
     val telemetry: TranslatorTelemetry = TranslatorTelemetry(),
     val aiTestState: AiTestState = AiTestState.Idle,
-    val sandboxState: SandboxState = SandboxState()
+    val sandboxState: SandboxState = SandboxState(),
+    val modelCatalogState: ModelCatalogState = ModelCatalogState()
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -118,6 +127,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val modelStatusState = MutableStateFlow(ModelDownloadState.UNKNOWN to (null as String?))
     private val aiTestStatusState = MutableStateFlow<AiTestState>(AiTestState.Idle)
     private val sandboxStatusState = MutableStateFlow(SandboxState())
+    private val modelCatalogStatusState = MutableStateFlow(ModelCatalogState())
+
+    // Per-provider isolated draft maps so switching providers never leaks another provider's key
+    private val activePresetDraft = MutableStateFlow(AiProviderPreset.GROQ)
+    private val apiKeyDrafts = mutableMapOf<AiProviderPreset, String>()
+    private val modelDrafts = mutableMapOf<AiProviderPreset, String>()
+    private val endpointDrafts = mutableMapOf<AiProviderPreset, String>()
 
     // Synchronous text-field drafts backed immediately by DataStore so typing/pasting never drops
     private val _aiApiKeyDraft = MutableStateFlow("")
@@ -143,7 +159,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         cacheRepository.observeCacheCount(),
         ServiceStateHolder.telemetry,
         aiTestStatusState,
-        sandboxStatusState
+        sandboxStatusState,
+        modelCatalogStatusState
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val perms = values[0] as Pair<Boolean, Boolean>
@@ -155,6 +172,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val telemetry = values[5] as TranslatorTelemetry
         val aiTestState = values[6] as AiTestState
         val sandboxState = values[7] as SandboxState
+        val catalogState = values[8] as ModelCatalogState
 
         MainUiState(
             hasOverlayPermission = perms.first,
@@ -166,7 +184,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             cacheCount = cacheCount,
             telemetry = telemetry,
             aiTestState = aiTestState,
-            sandboxState = sandboxState
+            sandboxState = sandboxState,
+            modelCatalogState = catalogState
         )
     }.stateIn(
         scope = viewModelScope,
@@ -181,7 +200,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             val initialConfig = settingsStore.configFlow.first()
-            _aiApiKeyDraft.value = initialConfig.aiApiKey
+            AiProviderPreset.entries.forEach { preset ->
+                apiKeyDrafts[preset] = initialConfig.apiKeyFor(preset)
+                modelDrafts[preset] = initialConfig.modelFor(preset)
+                endpointDrafts[preset] = initialConfig.endpointFor(preset)
+            }
+            activePresetDraft.value = initialConfig.aiPreset
+
+            _aiApiKeyDraft.value = initialConfig.apiKeyFor(initialConfig.aiPreset)
             _aiModelDraft.value = initialConfig.aiModelName
             _aiEndpointDraft.value = initialConfig.aiEndpointUrl
             _libreEndpointDraft.value = initialConfig.libreEndpointUrl
@@ -306,31 +332,90 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateAiPreset(preset: AiProviderPreset) {
-        _aiEndpointDraft.value = preset.defaultBaseUrl
-        _aiModelDraft.value = preset.defaultModel
+        activePresetDraft.value = preset
+        val isolatedKey = apiKeyDrafts[preset] ?: uiState.value.config.apiKeyFor(preset)
+        val isolatedModel = AiProviderPreset.sanitizeModelId(
+            preset,
+            modelDrafts[preset] ?: uiState.value.config.modelFor(preset)
+        )
+        val isolatedEndpoint = endpointDrafts[preset]?.takeIf { it.isNotBlank() }
+            ?: uiState.value.config.endpointFor(preset)
+
+        _aiApiKeyDraft.value = isolatedKey
+        _aiModelDraft.value = isolatedModel
+        _aiEndpointDraft.value = isolatedEndpoint
         aiTestStatusState.value = AiTestState.Idle
+        modelCatalogStatusState.value = modelCatalogStatusState.value.copy(
+            statusMessage = null,
+            errorMessage = null
+        )
         viewModelScope.launch { settingsStore.updateAiPreset(preset) }
     }
 
     fun onAiApiKeyChanged(newKey: String) {
+        val preset = activePresetDraft.value
         val sanitized = newKey.trim()
+        apiKeyDrafts[preset] = sanitized
         _aiApiKeyDraft.value = sanitized
         aiTestStatusState.value = AiTestState.Idle
-        viewModelScope.launch { settingsStore.updateAiApiKey(sanitized) }
+        modelCatalogStatusState.value = modelCatalogStatusState.value.copy(
+            statusMessage = null,
+            errorMessage = null
+        )
+        viewModelScope.launch { settingsStore.updateAiApiKey(preset, sanitized) }
     }
 
     fun onAiModelChanged(newModel: String) {
-        val sanitized = newModel.trim()
+        val preset = activePresetDraft.value
+        val sanitized = AiProviderPreset.sanitizeModelId(preset, newModel)
+        modelDrafts[preset] = sanitized
         _aiModelDraft.value = sanitized
         aiTestStatusState.value = AiTestState.Idle
-        viewModelScope.launch { settingsStore.updateAiModelName(sanitized) }
+        viewModelScope.launch { settingsStore.updateAiModelName(preset, sanitized) }
     }
 
     fun onAiEndpointChanged(newEndpoint: String) {
+        val preset = activePresetDraft.value
         val sanitized = newEndpoint.trim()
+        endpointDrafts[preset] = sanitized
         _aiEndpointDraft.value = sanitized
         aiTestStatusState.value = AiTestState.Idle
-        viewModelScope.launch { settingsStore.updateAiEndpointUrl(sanitized) }
+        viewModelScope.launch { settingsStore.updateAiEndpointUrl(preset, sanitized) }
+    }
+
+    fun refreshAiModels() {
+        val currentConfig = uiState.value.config.withDrafts()
+        val preset = currentConfig.aiPreset
+        if (modelCatalogStatusState.value.isFetching) return
+
+        modelCatalogStatusState.value = modelCatalogStatusState.value.copy(
+            isFetching = true,
+            statusMessage = null,
+            errorMessage = null
+        )
+        viewModelScope.launch {
+            try {
+                val models = smartAiTester.fetchAvailableModels(currentConfig)
+                val updatedMap = modelCatalogStatusState.value.modelsByPreset.toMutableMap().apply {
+                    put(preset, models)
+                }
+                modelCatalogStatusState.value = modelCatalogStatusState.value.copy(
+                    modelsByPreset = updatedMap,
+                    isFetching = false,
+                    statusMessage = "${models.size} güncel ${preset.shortLabelTr} modeli getirildi.",
+                    errorMessage = null
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("MainViewModel", "Model fetch failed for $preset", e)
+                modelCatalogStatusState.value = modelCatalogStatusState.value.copy(
+                    isFetching = false,
+                    statusMessage = null,
+                    errorMessage = e.localizedMessage ?: "Model listesi getirilemedi."
+                )
+            }
+        }
     }
 
     fun onLibreEndpointChanged(newEndpoint: String) {
@@ -347,13 +432,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { settingsStore.updateLibreApiKey(sanitized) }
     }
 
-    private fun TranslationConfig.withDrafts(): TranslationConfig = copy(
-        aiApiKey = _aiApiKeyDraft.value.trim(),
-        aiModelName = _aiModelDraft.value.trim(),
-        aiEndpointUrl = _aiEndpointDraft.value.trim(),
-        libreEndpointUrl = _libreEndpointDraft.value.trim(),
-        libreApiKey = _libreApiKeyDraft.value.trim()
-    )
+    private fun TranslationConfig.withDrafts(): TranslationConfig {
+        val preset = activePresetDraft.value
+        val activeKey = _aiApiKeyDraft.value.trim()
+        val mergedKeys = aiApiKeys.toMutableMap().apply {
+            putAll(apiKeyDrafts)
+            put(preset, activeKey)
+        }
+        return copy(
+            aiPreset = preset,
+            aiApiKey = activeKey,
+            aiApiKeys = mergedKeys,
+            aiModelName = AiProviderPreset.sanitizeModelId(preset, _aiModelDraft.value),
+            aiEndpointUrl = _aiEndpointDraft.value.trim().ifEmpty { preset.defaultBaseUrl },
+            libreEndpointUrl = _libreEndpointDraft.value.trim(),
+            libreApiKey = _libreApiKeyDraft.value.trim()
+        )
+    }
 
     fun testAiConnection() {
         val currentConfig = uiState.value.config.withDrafts()
