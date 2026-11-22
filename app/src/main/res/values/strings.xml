@@ -37,6 +37,9 @@
     <string name="engine_mode_offline">Yerel</string>
     <string name="engine_mode_hybrid">Hibrit</string>
     <string name="engine_mode_ai">AI</string>
+    <string name="tab_general_ai">Genel &amp; AI</string>
+    <string name="tab_appearance">Görünüm</string>
+    <string name="tab_sandbox_history">Test &amp; Geçmiş</string>
     <string name="tab_controls">Kontrol</string>
     <string name="tab_sandbox">Canlı Test</string>
     <string name="sandbox_en_sample">The ancient seal is breaking! Find the key before the shadow consumes the village.</string>

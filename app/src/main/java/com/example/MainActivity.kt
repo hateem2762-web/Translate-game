@@ -105,6 +105,8 @@ class MainActivity : ComponentActivity() {
                     onSelectDisplayMode = { viewModel.updateDisplayMode(it) },
                     onSelectEngineMode = { viewModel.updateEngineMode(it) },
                     onFontSizeSpChange = { viewModel.updateFontSizeSp(it) },
+                    onSubtitleTextColorChange = { viewModel.updateSubtitleTextColorArgb(it) },
+                    onClassicTextFitModeChange = { viewModel.updateClassicTextFitMode(it) },
                     onInPlacePaddingXChange = { viewModel.updateInPlacePaddingX(it) },
                     onInPlacePaddingYChange = { viewModel.updateInPlacePaddingY(it) },
                     onInPlaceCornerRadiusChange = { viewModel.updateInPlaceCornerRadius(it) },
@@ -129,6 +131,7 @@ class MainActivity : ComponentActivity() {
                     onShowOriginalChange = { viewModel.updateShowOriginalText(it) },
                     onResetRoiClick = { viewModel.resetRoi() },
                     onClearCacheClick = { viewModel.clearCache() },
+                    onClearSessionHistoryClick = { viewModel.clearSessionHistory() },
                     onSelectSandboxPreset = { viewModel.selectSandboxPreset(it) },
                     onRunSandboxTest = { viewModel.runSandboxTranslation(it) },
                     onClearSandbox = { viewModel.clearSandboxPreview() }

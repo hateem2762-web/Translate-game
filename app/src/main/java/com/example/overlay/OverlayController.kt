@@ -51,6 +51,8 @@ class OverlayController(
     private var currentDisplayMode: DisplayMode? = null
     private var appliedClassicWidthDp: Int = -1
     private var appliedClassicHeightDp: Int = -1
+    private var desiredClassicHeightPx: Int = -1
+    private var isResizingClassicBox: Boolean = false
     private var savedClassicX: Int = -1
     private var savedClassicY: Int = -1
     private var isShown = false
@@ -105,8 +107,17 @@ class OverlayController(
             context = context,
             onDragDelta = { dx, dy -> moveHudWindow(dx, dy) },
             onDragFinished = { commitClassicBoxLayoutIfActive() },
-            onClassicResizeDelta = { dw, dh -> resizeClassicBoxWindow(dw, dh) },
-            onClassicResizeFinished = { commitClassicBoxLayoutIfActive() },
+            onClassicResizeDelta = { dw, dh ->
+                isResizingClassicBox = true
+                resizeClassicBoxWindow(dw, dh)
+            },
+            onClassicResizeFinished = {
+                isResizingClassicBox = false
+                commitClassicBoxLayoutIfActive()
+            },
+            onClassicDesiredHeightChanged = { desiredPx ->
+                applyDynamicClassicHeight(desiredPx)
+            },
             onToggleDisplayMode = onToggleDisplayMode,
             onToggleEngineMode = onToggleEngineMode,
             onOpenModelPicker = onOpenModelPicker,
@@ -172,6 +183,10 @@ class OverlayController(
 
     fun hasActiveInPlaceOverlay(): Boolean {
         return roiView?.hasActiveInPlaceBlocks() == true
+    }
+
+    fun getActiveMaskRectsInRoi(): Pair<List<RoiRect>, Int> {
+        return roiView?.getActiveMaskRectsInRoi() ?: (emptyList<RoiRect>() to 0)
     }
 
     fun setInPlaceStealth(hidden: Boolean) {
@@ -359,7 +374,8 @@ class OverlayController(
             params.y = params.y.coerceIn(dp(36f), (bounds.height - dp(96f)).coerceAtLeast(dp(36f)))
         } else {
             val targetW = clampClassicWidthPx(dp(appliedClassicWidthDp.coerceAtLeast(200).toFloat()), bounds.width)
-            val targetH = clampClassicHeightPx(dp(appliedClassicHeightDp.coerceAtLeast(84).toFloat()), bounds.height)
+            val requestedH = if (desiredClassicHeightPx > 0) desiredClassicHeightPx else dp(appliedClassicHeightDp.coerceAtLeast(84).toFloat())
+            val targetH = clampClassicExpandedHeightPx(requestedH, bounds.height)
             params.width = targetW
             params.height = targetH
             params.x = if (savedClassicX >= 0) {
@@ -372,6 +388,24 @@ class OverlayController(
             } else {
                 params.y.coerceIn(dp(36f), (bounds.height - targetH - dp(12f)).coerceAtLeast(dp(36f)))
             }
+        }
+        if (view.isAttachedToWindow) {
+            windowManager.updateViewLayout(view, params)
+        }
+    }
+
+    private fun applyDynamicClassicHeight(requestedHeightPx: Int) {
+        if (currentDisplayMode != DisplayMode.CLASSIC_BOX || isResizingClassicBox) return
+        val view = hudView ?: return
+        val params = hudParams ?: return
+        val bounds = ScreenMetricsHelper.getScreenBounds(context)
+        val clampedH = clampClassicExpandedHeightPx(requestedHeightPx, bounds.height)
+        desiredClassicHeightPx = clampedH
+        if (kotlin.math.abs(params.height - clampedH) <= dp(3f)) return
+        params.height = clampedH
+        val maxY = (bounds.height - clampedH - dp(12f)).coerceAtLeast(dp(24f))
+        if (params.y > maxY) {
+            params.y = maxY
         }
         if (view.isAttachedToWindow) {
             windowManager.updateViewLayout(view, params)
@@ -475,6 +509,12 @@ class OverlayController(
     private fun clampClassicHeightPx(requestedPx: Int, screenHeight: Int): Int {
         val minPx = dp(84f)
         val maxPx = minOf(dp(340f), (screenHeight * 0.60f).toInt()).coerceAtLeast(minPx)
+        return requestedPx.coerceIn(minPx, maxPx)
+    }
+
+    private fun clampClassicExpandedHeightPx(requestedPx: Int, screenHeight: Int): Int {
+        val minPx = dp(84f)
+        val maxPx = minOf(dp(420f), (screenHeight * 0.56f).toInt()).coerceAtLeast(minPx)
         return requestedPx.coerceIn(minPx, maxPx)
     }
 

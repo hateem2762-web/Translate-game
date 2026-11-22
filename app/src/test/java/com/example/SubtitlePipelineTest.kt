@@ -748,4 +748,21 @@ class SubtitlePipelineTest {
         assertEquals("", pipeline.output.value.translatedText)
         assertTrue(pipeline.output.value.inPlaceBlocks.isEmpty())
     }
+
+    @Test
+    fun `subtitle color presets and custom hex parser handle valid and invalid inputs`() {
+        val cyan = com.example.model.SubtitleColorPreset.NEON_CYAN
+        assertEquals(cyan, com.example.model.SubtitleColorPreset.matchingOrNull(cyan.argb))
+        assertEquals("#22D3EE", com.example.model.SubtitleColorPreset.formatHex(cyan.argb))
+
+        val parsed = com.example.model.SubtitleColorPreset.parseHexColorOrNull("  #fde047 ")
+        assertEquals(0xFFFDE047.toInt(), parsed)
+        assertEquals(0xFF00E5FF.toInt(), com.example.model.SubtitleColorPreset.parseHexColorOrNull("00e5ff"))
+        assertEquals(null, com.example.model.SubtitleColorPreset.parseHexColorOrNull("#12345"))
+        assertEquals(null, com.example.model.SubtitleColorPreset.parseHexColorOrNull("#ZZZZZZ"))
+
+        assertEquals(2, com.example.model.ClassicTextFitMode.entries.size)
+        assertTrue(com.example.model.ClassicTextFitMode.entries.contains(com.example.model.ClassicTextFitMode.WRAP_AND_EXPAND))
+        assertTrue(com.example.model.ClassicTextFitMode.entries.contains(com.example.model.ClassicTextFitMode.AUTO_FIT_SHRINK))
+    }
 }

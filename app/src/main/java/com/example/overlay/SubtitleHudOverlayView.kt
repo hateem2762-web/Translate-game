@@ -6,6 +6,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
@@ -20,6 +23,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.content.res.ResourcesCompat
 import com.example.R
+import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
 import com.example.model.ServiceStatus
 import com.example.model.TranslationEngineMode
@@ -41,6 +45,7 @@ class SubtitleHudOverlayView(
     private val onDragFinished: () -> Unit = {},
     private val onClassicResizeDelta: (dw: Int, dh: Int) -> Unit = { _, _ -> },
     private val onClassicResizeFinished: () -> Unit = {},
+    private val onClassicDesiredHeightChanged: (desiredHeightPx: Int) -> Unit = {},
     private val onToggleDisplayMode: () -> Unit,
     private val onToggleEngineMode: () -> Unit,
     private val onOpenModelPicker: () -> Unit = {},
@@ -53,7 +58,13 @@ class SubtitleHudOverlayView(
 ) : FrameLayout(context) {
 
     private val density = resources.displayMetrics.density
+    private val scaledDensity = resources.displayMetrics.scaledDensity
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+    private val jakartaFont = ResourcesCompat.getFont(context, R.font.plus_jakarta_sans)
+    private val measurePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = jakartaFont
+        isFakeBoldText = true
+    }
 
     // Classic box container & children
     private val classicWrapper: FrameLayout
@@ -98,8 +109,10 @@ class SubtitleHudOverlayView(
     private var lastClassicBoxOpacity: Float = 0.86f
     private var currentDisplayMode: DisplayMode = DisplayMode.CLASSIC_BOX
 
+    private var lastDesiredExpandedHeightPx: Int = -1
+    private val headerRow: LinearLayout
+
     init {
-        val jakartaFont = ResourcesCompat.getFont(context, R.font.plus_jakarta_sans)
         val monoFont = ResourcesCompat.getFont(context, R.font.jetbrains_mono)
 
         // 1. Classic Box Layout (resizable wrapper + scrollable outlined text + corner grip)
@@ -113,11 +126,11 @@ class SubtitleHudOverlayView(
 
         classicContainer = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12f), dp(8f), dp(8f), dp(12f))
+            setPadding(dp(10f), dp(6f), dp(8f), dp(8f))
             background = classicBgDrawable
         }
 
-        val headerRow = LinearLayout(context).apply {
+        headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
@@ -197,8 +210,9 @@ class SubtitleHudOverlayView(
         textScrollView = ScrollView(context).apply {
             isVerticalScrollBarEnabled = true
             isScrollbarFadingEnabled = true
+            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-            setPadding(0, dp(4f), dp(10f), dp(2f))
+            setPadding(0, dp(3f), 0, 0)
         }
 
         val textStack = LinearLayout(context).apply {
@@ -207,11 +221,14 @@ class SubtitleHudOverlayView(
 
         translatedTextView = OutlinedSubtitleTextView(context, outlineWidthDp = 3.2f).apply {
             text = context.getString(R.string.overlay_waiting_subtitle)
-            setTextColor(Color.parseColor("#F8FAFC"))
+            setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             typeface = jakartaFont
             isFakeBoldTextCompat = true
-            setLineSpacing(dp(3f).toFloat(), 1.0f)
+            setPadding(dp(2f), 0, dp(2f), 0)
+            hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+            breakStrategy = Layout.BREAK_STRATEGY_HIGH_QUALITY
+            setLineSpacing(dp(2.5f).toFloat(), 1.0f)
             alpha = 1f
         }
         textStack.addView(
@@ -224,6 +241,8 @@ class SubtitleHudOverlayView(
             setTextColor(Color.parseColor("#CBD5E1"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = jakartaFont
+            setPadding(dp(2f), 0, dp(2f), 0)
+            hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
             alpha = 1f
         }
         textStack.addView(
@@ -569,30 +588,125 @@ class SubtitleHudOverlayView(
                 else -> "HAZIR"
             }
 
-            val clampedSp = telemetry.fontSizeSp.coerceIn(12f, 32f)
+            val targetSp = telemetry.fontSizeSp.coerceIn(12f, 32f)
             translatedTextView.visibility = View.VISIBLE
-            translatedTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, clampedSp)
+            translatedTextView.setTextColor(telemetry.subtitleTextColorArgb)
+
             val nextText = when {
                 telemetry.errorMessage != null -> telemetry.errorMessage
                 telemetry.currentTranslatedText.isNotBlank() -> telemetry.currentTranslatedText
                 else -> context.getString(R.string.overlay_waiting_subtitle)
             }
+
+            val boxW = if (classicWrapper.width > 0) {
+                classicWrapper.width
+            } else {
+                dp(telemetry.classicBoxWidthDp.coerceIn(200, 440).toFloat())
+            }
+            val availTextW = (boxW - dp(22f)).coerceAtLeast(dp(120f))
+            val headerH = if (headerRow.height > 0) headerRow.height else dp(32f)
+            val baseBoxH = dp(telemetry.classicBoxHeightDp.coerceIn(84, 340).toFloat())
+            val verticalChromePx = headerH + dp(20f)
+            val availTextH = (baseBoxH - verticalChromePx).coerceAtLeast(dp(24f))
+
+            val showOrigRow = !isClassicBoxStealth && showOriginal && telemetry.currentSourceText.isNotBlank()
+            val origExtraH = if (showOrigRow) {
+                val origSp = (targetSp - 3.5f).coerceAtLeast(11f)
+                measurePaint.textSize = origSp * scaledDensity
+                val origLayout = StaticLayout.Builder
+                    .obtain(telemetry.currentSourceText, 0, telemetry.currentSourceText.length, measurePaint, availTextW)
+                    .setLineSpacing(0f, 1.0f)
+                    .setIncludePad(false)
+                    .build()
+                origLayout.height + dp(6f)
+            } else {
+                0
+            }
+
+            val effectiveAvailForTranslatedH = (availTextH - origExtraH).coerceAtLeast(dp(20f))
+
+            val resolvedSp = when (telemetry.classicTextFitMode) {
+                ClassicTextFitMode.WRAP_AND_EXPAND -> targetSp
+                ClassicTextFitMode.AUTO_FIT_SHRINK -> resolveAutoFitFontSp(
+                    text = nextText,
+                    targetSp = targetSp,
+                    availWidthPx = availTextW,
+                    availHeightPx = effectiveAvailForTranslatedH
+                )
+            }
+
+            translatedTextView.setTextSize(TypedValue.COMPLEX_UNIT_SP, resolvedSp)
             if (translatedTextView.text.toString() != nextText) {
                 translatedTextView.text = nextText
                 textScrollView.scrollTo(0, 0)
             }
 
-            if (!isClassicBoxStealth && showOriginal && telemetry.currentSourceText.isNotBlank()) {
+            if (showOrigRow) {
                 originalTextView.visibility = View.VISIBLE
                 originalTextView.setTextSize(
                     TypedValue.COMPLEX_UNIT_SP,
-                    (clampedSp - 3.5f).coerceAtLeast(11f)
+                    (resolvedSp - 3.5f).coerceAtLeast(11f)
                 )
                 originalTextView.text = telemetry.currentSourceText
             } else {
                 originalTextView.visibility = View.GONE
             }
+
+            val desiredBoxHeightPx = if (telemetry.classicTextFitMode == ClassicTextFitMode.WRAP_AND_EXPAND) {
+                measurePaint.textSize = resolvedSp * scaledDensity
+                val transLayout = StaticLayout.Builder
+                    .obtain(nextText, 0, nextText.length, measurePaint, availTextW)
+                    .setLineSpacing(dp(2.5f).toFloat(), 1.0f)
+                    .setIncludePad(false)
+                    .build()
+                maxOf(baseBoxH, verticalChromePx + transLayout.height + origExtraH + dp(4f))
+            } else {
+                baseBoxH
+            }
+            if (desiredBoxHeightPx != lastDesiredExpandedHeightPx) {
+                lastDesiredExpandedHeightPx = desiredBoxHeightPx
+                onClassicDesiredHeightChanged(desiredBoxHeightPx)
+            }
         }
+    }
+
+    private fun resolveAutoFitFontSp(
+        text: String,
+        targetSp: Float,
+        availWidthPx: Int,
+        availHeightPx: Int
+    ): Float {
+        if (text.isBlank()) return targetSp
+        val minSp = 11f
+        if (targetSp <= minSp) return minSp
+
+        // 1. Prefer keeping text on 1 clean line without breaking awkwardly if achievable >= 11sp
+        if (!text.contains('\n')) {
+            var sp = targetSp
+            while (sp >= minSp) {
+                measurePaint.textSize = sp * scaledDensity
+                if (measurePaint.measureText(text) <= availWidthPx - dp(2f)) {
+                    return sp
+                }
+                sp -= 0.5f
+            }
+        }
+
+        // 2. For multi-line / long dialogue that exceeds 1 line even at 11sp, fit cleanly inside availHeightPx
+        var sp = targetSp
+        while (sp > minSp) {
+            measurePaint.textSize = sp * scaledDensity
+            val layout = StaticLayout.Builder
+                .obtain(text, 0, text.length, measurePaint, availWidthPx)
+                .setLineSpacing(dp(2.5f).toFloat(), 1.0f)
+                .setIncludePad(false)
+                .build()
+            if (layout.height <= availHeightPx) {
+                return sp
+            }
+            sp = (sp - 0.5f).coerceAtLeast(minSp)
+        }
+        return minSp
     }
 
     private fun compactModelLabel(modelId: String): String {

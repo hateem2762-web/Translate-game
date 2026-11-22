@@ -23,6 +23,7 @@ import com.example.engine.SmartAiTranslationProvider
 import com.example.engine.SubtitlePipeline
 import com.example.model.AiModelOption
 import com.example.model.AiProviderPreset
+import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
 import com.example.model.InPlaceBlock
 import com.example.model.ModelDownloadState
@@ -275,6 +276,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateFontSizeSp(fontSizeSp: Float) {
         viewModelScope.launch { settingsStore.updateFontSizeSp(fontSizeSp) }
+    }
+
+    fun updateSubtitleTextColorArgb(argb: Int) {
+        viewModelScope.launch { settingsStore.updateSubtitleTextColorArgb(argb) }
+    }
+
+    fun updateClassicTextFitMode(mode: ClassicTextFitMode) {
+        viewModelScope.launch { settingsStore.updateClassicTextFitMode(mode) }
     }
 
     fun updateInPlacePaddingX(dp: Float) {

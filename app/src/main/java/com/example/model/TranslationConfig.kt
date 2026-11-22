@@ -7,6 +7,43 @@ enum class DisplayMode(val shortLabelTr: String) {
     IN_PLACE_BLUR("Doğal")
 }
 
+enum class ClassicTextFitMode(val labelTr: String, val descriptionTr: String) {
+    WRAP_AND_EXPAND(
+        labelTr = "Satır Kaydır & Genişlet",
+        descriptionTr = "Metin kutu genişliğini aşarsa alt satıra geçer ve kutu yüksekliği kaydırmaya gerek kalmadan otomatik esner."
+    ),
+    AUTO_FIT_SHRINK(
+        labelTr = "Otomatik Küçült",
+        descriptionTr = "Metin mevcut sınırları aşarsa alt satıra bölmek yerine yazı boyutunu kutuya sığana kadar küçültür (min 11sp)."
+    )
+}
+
+enum class SubtitleColorPreset(val labelTr: String, val argb: Int, val hex: String) {
+    PURE_WHITE("Saf Beyaz", 0xFFFFFFFF.toInt(), "#FFFFFF"),
+    CINEMA_GOLD("Altın Sarısı", 0xFFFFD54F.toInt(), "#FFD54F"),
+    NEON_CYAN("Neon Camgöbeği", 0xFF22D3EE.toInt(), "#22D3EE"),
+    LIGHT_GREEN("Açık Yeşil", 0xFF6EE7B7.toInt(), "#6EE7B7"),
+    PASTEL_PINK("Pastel Pembe", 0xFFF9A8D4.toInt(), "#F9A8D4");
+
+    companion object {
+        fun matchingOrNull(argb: Int): SubtitleColorPreset? {
+            return entries.firstOrNull { (it.argb and 0x00FFFFFF) == (argb and 0x00FFFFFF) }
+        }
+
+        fun parseHexColorOrNull(raw: String): Int? {
+            val cleaned = raw.trim().removePrefix("#")
+            if (cleaned.length != 6 && cleaned.length != 8) return null
+            val parsed = cleaned.toLongOrNull(16) ?: return null
+            val rgb = (parsed and 0x00FFFFFFL).toInt()
+            return 0xFF000000.toInt() or rgb
+        }
+
+        fun formatHex(argb: Int): String {
+            return String.format("#%06X", argb and 0x00FFFFFF)
+        }
+    }
+}
+
 enum class TranslationEngineMode(val shortLabelTr: String) {
     OFFLINE_LOCAL("Yerel"),
     HYBRID("Hibrit"),
@@ -154,24 +191,26 @@ data class TranslationConfig(
     val sourceLangCode: String = TranslateLanguage.ENGLISH,
     val targetLangCode: String = TranslateLanguage.TURKISH,
     val debounceMs: Long = 350L,
-    val scanIntervalMs: Long = 300L,
+    val scanIntervalMs: Long = 350L,
     val overlayOpacity: Float = 0.86f,
     val showOriginalText: Boolean = false,
     val displayMode: DisplayMode = DisplayMode.CLASSIC_BOX,
     val engineMode: TranslationEngineMode = TranslationEngineMode.OFFLINE_LOCAL,
     val fontSizeSp: Float = 18f,
+    val subtitleTextColorArgb: Int = SubtitleColorPreset.PURE_WHITE.argb,
     // Fine-tuned In-Place Blur geometry (in dp)
     val inPlacePaddingXdp: Float = 10f,
     val inPlacePaddingYdp: Float = 5f,
     val inPlaceCornerRadiusDp: Float = 12f,
     val inPlaceOffsetXdp: Float = 0f,
     val inPlaceOffsetYdp: Float = 0f,
-    // Resizable & persisted Classic Box dimensions and background-only opacity (0f..1f)
+    // Resizable & persisted Classic Box dimensions, text fitting behavior, and background-only opacity (0f..1f)
     val classicBoxWidthDp: Int = 340,
     val classicBoxHeightDp: Int = 136,
     val classicBoxX: Int = -1,
     val classicBoxY: Int = -1,
     val classicBoxOpacity: Float = 0.86f,
+    val classicTextFitMode: ClassicTextFitMode = ClassicTextFitMode.WRAP_AND_EXPAND,
     val aiPreset: AiProviderPreset = AiProviderPreset.GROQ,
     val aiApiKey: String = "",
     val aiApiKeys: Map<AiProviderPreset, String> = emptyMap(),

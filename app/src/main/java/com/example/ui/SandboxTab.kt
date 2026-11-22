@@ -20,8 +20,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,18 +32,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BlurOn
-import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.OfflineBolt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SportsEsports
@@ -55,15 +51,12 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -80,15 +73,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.res.ResourcesCompat
 import com.example.R
+import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
 import com.example.model.InPlaceBlock
 import com.example.model.ModelDownloadState
@@ -102,28 +100,15 @@ import com.example.ui.theme.EmeraldSuccess
 import com.example.ui.theme.ObsidianOutline
 import com.example.ui.theme.ObsidianSurface
 import com.example.ui.theme.ObsidianSurfaceElevated
-import kotlin.math.roundToInt
 
 @Composable
-fun SandboxTab(
+fun SandboxSimulationCard(
     uiState: MainUiState,
     isServiceActive: Boolean,
     onSelectPreset: (SandboxPreset) -> Unit,
+    onSelectDisplayMode: (DisplayMode) -> Unit,
     onRunSandboxTest: (Bitmap) -> Unit,
     onClearSandbox: () -> Unit,
-    onSelectDisplayMode: (DisplayMode) -> Unit,
-    onSelectEngineMode: (TranslationEngineMode) -> Unit,
-    onFontSizeSpChange: (Float) -> Unit,
-    onInPlacePaddingXChange: (Float) -> Unit,
-    onInPlacePaddingYChange: (Float) -> Unit,
-    onInPlaceCornerRadiusChange: (Float) -> Unit,
-    onInPlaceOffsetXChange: (Float) -> Unit,
-    onInPlaceOffsetYChange: (Float) -> Unit,
-    onResetInPlaceTuning: () -> Unit,
-    onClassicBoxWidthChange: (Int) -> Unit,
-    onClassicBoxHeightChange: (Int) -> Unit,
-    onClassicBoxOpacityChange: (Float) -> Unit,
-    onResetClassicBoxLayout: () -> Unit,
     onDownloadModelClick: () -> Unit,
     onStartCaptureClick: () -> Unit,
     onStopCaptureClick: () -> Unit
@@ -137,7 +122,8 @@ fun SandboxTab(
         uiState.config.inPlacePaddingYdp,
         uiState.config.inPlaceCornerRadiusDp,
         uiState.config.inPlaceOffsetXdp,
-        uiState.config.inPlaceOffsetYdp
+        uiState.config.inPlaceOffsetYdp,
+        uiState.config.subtitleTextColorArgb
     ) {
         InPlaceRenderStyle(
             fontSizeSp = uiState.config.fontSizeSp,
@@ -145,622 +131,513 @@ fun SandboxTab(
             paddingYdp = uiState.config.inPlacePaddingYdp,
             cornerRadiusDp = uiState.config.inPlaceCornerRadiusDp,
             offsetXdp = uiState.config.inPlaceOffsetXdp,
-            offsetYdp = uiState.config.inPlaceOffsetYdp
+            offsetYdp = uiState.config.inPlaceOffsetYdp,
+            textColorArgb = uiState.config.subtitleTextColorArgb
         )
     }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .widthIn(max = 640.dp),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+    Card(
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = ObsidianSurfaceElevated),
+        border = BorderStroke(1.dp, ObsidianOutline)
     ) {
-        item {
-            Card(
-                shape = MaterialTheme.shapes.large,
-                colors = CardDefaults.cardColors(containerColor = ObsidianSurfaceElevated),
-                border = BorderStroke(1.dp, ObsidianOutline)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Rounded.SportsEsports,
-                                contentDescription = null,
-                                tint = CyanPrimary,
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(
-                                    text = "Oyun Sahnesi Simülasyonu",
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Text(
-                                    text = "Oyuna girmeden OCR, Çince desteği, Doğal Blur ve Kutu boyutunu deneyin",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-
-                    // 2 Preset Dialogue Selector Buttons (English / Chinese)
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        SandboxPreset.entries.forEachIndexed { index, preset ->
-                            val selected = uiState.sandboxState.selectedPreset == preset
-                            SegmentedButton(
-                                selected = selected,
-                                onClick = { onSelectPreset(preset) },
-                                shape = SegmentedButtonDefaults.itemShape(
-                                    index = index,
-                                    count = SandboxPreset.entries.size
-                                ),
-                                modifier = Modifier
-                                    .height(48.dp)
-                                    .testTag("sandbox_preset_${preset.name.lowercase()}"),
-                                colors = SegmentedButtonDefaults.colors(
-                                    activeContainerColor = CyanContainer,
-                                    activeContentColor = CyanPrimary,
-                                    inactiveContainerColor = ObsidianSurface,
-                                    inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            ) {
-                                Text(
-                                    text = preset.labelTr,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-
-                    // Simulated Dark Game Viewport + Live Preview Overlay
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(275.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0xFF070B14))
-                    ) {
-                        AndroidView(
-                            factory = { ctx ->
-                                SandboxSceneContainer(ctx).also { sceneHostRef = it }
-                            },
-                            update = { view ->
-                                sceneHostRef = view
-                                view.updateScene(
-                                    dialogueText = uiState.sandboxState.selectedPreset.sampleText,
-                                    inPlaceBlocks = if (uiState.config.displayMode == DisplayMode.IN_PLACE_BLUR) {
-                                        uiState.sandboxState.inPlaceBlocks
-                                    } else {
-                                        emptyList()
-                                    },
-                                    style = renderStyle
-                                )
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-
-                        // Classic Box preview: background & border opacity 0%-100%, text always 100% opaque with black stroke+shadow
-                        if (uiState.config.displayMode == DisplayMode.CLASSIC_BOX &&
-                            uiState.sandboxState.translatedText.isNotBlank()
-                        ) {
-                            val boxOpacity = uiState.config.classicBoxOpacity.coerceIn(0f, 1f)
-                            Surface(
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(horizontal = 10.dp, vertical = 12.dp)
-                                    .widthIn(max = uiState.config.classicBoxWidthDp.dp)
-                                    .fillMaxWidth()
-                                    .heightIn(min = 68.dp, max = uiState.config.classicBoxHeightDp.coerceAtMost(190).dp),
-                                shape = RoundedCornerShape(14.dp),
-                                color = Color(0xFF090E17).copy(alpha = boxOpacity),
-                                border = BorderStroke(1.dp, CyanPrimary.copy(alpha = boxOpacity * 0.45f))
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                                        .verticalScroll(rememberScrollState()),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Text(
-                                        text = if (uiState.sandboxState.isAiRefining) {
-                                            "KLASİK KUTU • AI İYİLEŞTİRİYOR…"
-                                        } else {
-                                            "KLASİK KUTU • ${uiState.sandboxState.latencyMs}ms"
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (uiState.sandboxState.isAiRefining) AmberTertiary else CyanPrimary
-                                    )
-                                    Box {
-                                        Text(
-                                            text = uiState.sandboxState.translatedText,
-                                            style = TextStyle(
-                                                fontSize = uiState.config.fontSizeSp.sp,
-                                                lineHeight = (uiState.config.fontSizeSp * 1.32f).sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = Color(0xF504080F),
-                                                drawStyle = Stroke(width = 6f, join = StrokeJoin.Round),
-                                                shadow = Shadow(
-                                                    color = Color(0xF5000000),
-                                                    offset = Offset(0f, 2f),
-                                                    blurRadius = 6f
-                                                )
-                                            )
-                                        )
-                                        Text(
-                                            text = uiState.sandboxState.translatedText,
-                                            style = TextStyle(
-                                                fontSize = uiState.config.fontSizeSp.sp,
-                                                lineHeight = (uiState.config.fontSizeSp * 1.32f).sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = Color(0xFFF8FAFC)
-                                            )
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Preview of the floating circular corner button when In-Place Blur is active
-                        if (uiState.config.displayMode == DisplayMode.IN_PLACE_BLUR) {
-                            Surface(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(10.dp)
-                                    .size(38.dp),
-                                shape = CircleShape,
-                                color = Color(0xE8090E17),
-                                border = BorderStroke(1.5.dp, CyanPrimary.copy(alpha = 0.75f))
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.BlurOn,
-                                        contentDescription = "Köşe kontrol butonu önizlemesi",
-                                        tint = CyanPrimary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Primary 1-tap Live OCR + Translation + Blur Test Button
-                    Button(
-                        onClick = {
-                            val bmp = sceneHostRef?.captureCleanSceneBitmap()
-                            if (bmp != null) {
-                                onRunSandboxTest(bmp)
-                            }
-                        },
-                        enabled = !uiState.sandboxState.isRunning,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                            .testTag("run_sandbox_test_button"),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = CyanPrimary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        )
-                    ) {
-                        if (uiState.sandboxState.isRunning) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("OCR & Çeviri Çalışıyor…", style = MaterialTheme.typography.labelLarge)
-                        } else {
-                            Icon(imageVector = Icons.Rounded.Translate, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Sahneyi Tara ve Canlı Çevir", style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
-
-                    // Secondary button: launch/stop real MediaProjection ROI overlay right over this Sandbox
-                    OutlinedButton(
-                        onClick = if (isServiceActive) onStopCaptureClick else onStartCaptureClick,
-                        enabled = isServiceActive || allPermissionsReady,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("sandbox_roi_capture_button"),
-                        shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(
-                            1.dp,
-                            if (isServiceActive) MaterialTheme.colorScheme.error else CyanPrimary.copy(alpha = 0.6f)
-                        )
-                    ) {
-                        Icon(
-                            imageVector = if (isServiceActive) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
-                            contentDescription = null,
-                            tint = if (isServiceActive) MaterialTheme.colorScheme.error else CyanPrimary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
+                    Icon(
+                        imageVector = Icons.Rounded.SportsEsports,
+                        contentDescription = null,
+                        tint = CyanPrimary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
                         Text(
-                            text = if (isServiceActive) {
-                                "Gerçek ROI Yakalamayı Durdur"
-                            } else if (allPermissionsReady) {
-                                "Gerçek ROI Çerçevesi ile Sahne Üzerinde Dene"
+                            text = "Oyun Sahnesi Simülasyonu",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = "Görünüm sekmesindeki renk, boyut, sığdırma ve blur ayarlarını oyuna girmeden test edin",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Quick Display Mode Switch for instant A/B visual testing
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                DisplayMode.entries.forEachIndexed { index, mode ->
+                    SegmentedButton(
+                        selected = uiState.config.displayMode == mode,
+                        onClick = { onSelectDisplayMode(mode) },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = DisplayMode.entries.size
+                        ),
+                        modifier = Modifier
+                            .height(48.dp)
+                            .testTag("sandbox_display_mode_${mode.name.lowercase()}"),
+                        colors = SegmentedButtonDefaults.colors(
+                            activeContainerColor = CyanContainer,
+                            activeContentColor = CyanPrimary,
+                            inactiveContainerColor = ObsidianSurface,
+                            inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    ) {
+                        Text(
+                            text = if (mode == DisplayMode.CLASSIC_BOX) {
+                                stringResource(R.string.display_mode_classic)
                             } else {
-                                "Gerçek ROI için Kontrol Sekmesinden İzin Verin"
+                                stringResource(R.string.display_mode_in_place)
                             },
-                            color = if (isServiceActive) MaterialTheme.colorScheme.error else CyanPrimary,
+                            style = MaterialTheme.typography.labelMedium,
                             maxLines = 1,
+                            softWrap = false,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                }
+            }
 
-                    // Model / Error feedback inside Sandbox
-                    if ((uiState.config.engineMode == TranslationEngineMode.OFFLINE_LOCAL ||
-                            uiState.config.engineMode == TranslationEngineMode.HYBRID) &&
-                        uiState.modelState != ModelDownloadState.READY
+            // Preset Dialogue Selector Buttons (English / Chinese)
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SandboxPreset.entries.forEachIndexed { index, preset ->
+                    val selected = uiState.sandboxState.selectedPreset == preset
+                    SegmentedButton(
+                        selected = selected,
+                        onClick = { onSelectPreset(preset) },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = SandboxPreset.entries.size
+                        ),
+                        modifier = Modifier
+                            .height(48.dp)
+                            .testTag("sandbox_preset_${preset.name.lowercase()}"),
+                        colors = SegmentedButtonDefaults.colors(
+                            activeContainerColor = CyanContainer,
+                            activeContentColor = CyanPrimary,
+                            inactiveContainerColor = ObsidianSurface,
+                            inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = AmberTertiary.copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, AmberTertiary.copy(alpha = 0.35f))
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.WarningAmber,
-                                        contentDescription = null,
-                                        tint = AmberTertiary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Seçili dil paketi henüz indirilmedi.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = AmberTertiary
-                                    )
-                                }
-                                TextButton(
-                                    onClick = onDownloadModelClick,
-                                    enabled = uiState.modelState != ModelDownloadState.DOWNLOADING
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Download,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        if (uiState.modelState == ModelDownloadState.DOWNLOADING) "İniyor…" else "İndir"
-                                    )
-                                }
-                            }
-                        }
+                        Text(
+                            text = preset.labelTr,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
+                }
+            }
 
-                    uiState.sandboxState.errorMessage?.let { err ->
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
-                        ) {
-                            Text(
-                                text = err,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(10.dp)
+            // Simulated Dark Game Viewport + Live Preview Overlay
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(275.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF070B14))
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        SandboxSceneContainer(ctx).also { sceneHostRef = it }
+                    },
+                    update = { view ->
+                        sceneHostRef = view
+                        view.updateScene(
+                            dialogueText = uiState.sandboxState.selectedPreset.sampleText,
+                            inPlaceBlocks = if (uiState.config.displayMode == DisplayMode.IN_PLACE_BLUR) {
+                                uiState.sandboxState.inPlaceBlocks
+                            } else {
+                                emptyList()
+                            },
+                            style = renderStyle
+                        )
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // Classic Box preview: background & border opacity 0%-100%, text 100% opaque in chosen color + fit mode
+                if (uiState.config.displayMode == DisplayMode.CLASSIC_BOX &&
+                    uiState.sandboxState.translatedText.isNotBlank()
+                ) {
+                    ClassicSandboxPreviewBox(
+                        uiState = uiState,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(horizontal = 10.dp, vertical = 12.dp)
+                    )
+                }
+
+                // Preview of the floating circular corner button when In-Place Blur is active
+                if (uiState.config.displayMode == DisplayMode.IN_PLACE_BLUR) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(10.dp)
+                            .size(38.dp),
+                        shape = CircleShape,
+                        color = Color(0xE8090E17),
+                        border = BorderStroke(1.5.dp, CyanPrimary.copy(alpha = 0.75f))
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.BlurOn,
+                                contentDescription = "Köşe kontrol butonu önizlemesi",
+                                tint = CyanPrimary,
+                                modifier = Modifier.size(18.dp)
                             )
-                        }
-                    }
-
-                    if (uiState.sandboxState.recognizedText.isNotBlank()) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = ObsidianSurface,
-                            border = BorderStroke(1.dp, ObsidianOutline)
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.CheckCircle,
-                                            contentDescription = null,
-                                            tint = if (uiState.sandboxState.isAiRefining) AmberTertiary else EmeraldSuccess,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = if (uiState.sandboxState.isAiRefining) {
-                                                "Anlık Yerel (${uiState.sandboxState.latencyMs} ms) • AI İyileştiriyor…"
-                                            } else {
-                                                "OCR Algıladı (${uiState.sandboxState.latencyMs} ms)"
-                                            },
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = if (uiState.sandboxState.isAiRefining) AmberTertiary else EmeraldSuccess
-                                        )
-                                    }
-                                    TextButton(onClick = onClearSandbox) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Refresh,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Sıfırla")
-                                    }
-                                }
-                                Text(
-                                    text = "Kaynak: ${uiState.sandboxState.recognizedText}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "Çeviri: ${uiState.sandboxState.translatedText}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
                         }
                     }
                 }
             }
-        }
 
-        // Instant Sandbox Controls for Display Mode, Precision Font Size, Geometry/Box Size, and Engine
-        item {
-            Card(
-                shape = MaterialTheme.shapes.large,
-                colors = CardDefaults.cardColors(containerColor = ObsidianSurface),
-                border = BorderStroke(1.dp, ObsidianOutline)
+            // Primary 1-tap Live OCR + Translation + Blur Test Button
+            Button(
+                onClick = {
+                    val bmp = sceneHostRef?.captureCleanSceneBitmap()
+                    if (bmp != null) {
+                        onRunSandboxTest(bmp)
+                    }
+                },
+                enabled = !uiState.sandboxState.isRunning,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("run_sandbox_test_button"),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CyanPrimary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                if (uiState.sandboxState.isRunning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("OCR & Çeviri Çalışıyor…", style = MaterialTheme.typography.labelLarge)
+                } else {
+                    Icon(imageVector = Icons.Rounded.Translate, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Sahneyi Tara ve Canlı Çevir", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+
+            // Secondary button: launch/stop real MediaProjection ROI overlay
+            OutlinedButton(
+                onClick = if (isServiceActive) onStopCaptureClick else onStartCaptureClick,
+                enabled = isServiceActive || allPermissionsReady,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("sandbox_roi_capture_button"),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (isServiceActive) MaterialTheme.colorScheme.error else CyanPrimary.copy(alpha = 0.6f)
+                )
+            ) {
+                Icon(
+                    imageVector = if (isServiceActive) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
+                    contentDescription = null,
+                    tint = if (isServiceActive) MaterialTheme.colorScheme.error else CyanPrimary
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isServiceActive) {
+                        "Gerçek ROI Yakalamayı Durdur"
+                    } else if (allPermissionsReady) {
+                        "Gerçek ROI Çerçevesi ile Sahne Üzerinde Dene"
+                    } else {
+                        "Gerçek ROI için Yukarıdan İzin Verin"
+                    },
+                    color = if (isServiceActive) MaterialTheme.colorScheme.error else CyanPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if ((uiState.config.engineMode == TranslationEngineMode.OFFLINE_LOCAL ||
+                    uiState.config.engineMode == TranslationEngineMode.HYBRID) &&
+                uiState.modelState != ModelDownloadState.READY
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = AmberTertiary.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, AmberTertiary.copy(alpha = 0.35f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.WarningAmber,
+                                contentDescription = null,
+                                tint = AmberTertiary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Seçili dil paketi henüz indirilmedi.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AmberTertiary
+                            )
+                        }
+                        TextButton(
+                            onClick = onDownloadModelClick,
+                            enabled = uiState.modelState != ModelDownloadState.DOWNLOADING
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Download,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                if (uiState.modelState == ModelDownloadState.DOWNLOADING) "İniyor…" else "İndir"
+                            )
+                        }
+                    }
+                }
+            }
+
+            uiState.sandboxState.errorMessage?.let { err ->
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
                 ) {
                     Text(
-                        text = "Canlı Önizleme İnce Ayarları",
-                        style = MaterialTheme.typography.titleMedium
+                        text = err,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp)
                     )
+                }
+            }
 
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(text = "Görüntüleme Modu", style = MaterialTheme.typography.labelLarge)
-                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                            DisplayMode.entries.forEachIndexed { index, mode ->
-                                SegmentedButton(
-                                    selected = uiState.config.displayMode == mode,
-                                    onClick = { onSelectDisplayMode(mode) },
-                                    shape = SegmentedButtonDefaults.itemShape(
-                                        index = index,
-                                        count = DisplayMode.entries.size
-                                    ),
-                                    modifier = Modifier.height(48.dp)
-                                ) {
-                                    Text(
-                                        text = if (mode == DisplayMode.CLASSIC_BOX) "Klasik Kutu" else "Doğal Blur",
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = ObsidianOutline)
-
-                    SandboxPrecisionSlider(
-                        title = "Altyazı Yazı Boyutu",
-                        valueLabel = "${uiState.config.fontSizeSp.roundToInt()} sp",
-                        value = uiState.config.fontSizeSp,
-                        valueRange = 12f..32f,
-                        steps = 19,
-                        testTag = "sandbox_font_size_slider",
-                        onValueChange = { onFontSizeSpChange(it.roundToInt().toFloat()) }
-                    )
-
-                    HorizontalDivider(color = ObsidianOutline)
-
-                    if (uiState.config.displayMode == DisplayMode.IN_PLACE_BLUR) {
+            if (uiState.sandboxState.recognizedText.isNotBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = ObsidianSurface,
+                    border = BorderStroke(1.dp, ObsidianOutline)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "Blur Geometri İnce Ayarı",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = CyanPrimary
-                            )
-                            TextButton(onClick = onResetInPlaceTuning) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.CheckCircle,
+                                    contentDescription = null,
+                                    tint = if (uiState.sandboxState.isAiRefining) AmberTertiary else EmeraldSuccess,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (uiState.sandboxState.isAiRefining) {
+                                        "Anlık Yerel (${uiState.sandboxState.latencyMs} ms) • AI İyileştiriyor…"
+                                    } else {
+                                        "OCR Algıladı (${uiState.sandboxState.latencyMs} ms)"
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (uiState.sandboxState.isAiRefining) AmberTertiary else EmeraldSuccess
+                                )
+                            }
+                            TextButton(onClick = onClearSandbox) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Text("Sıfırla")
                             }
                         }
-                        SandboxPrecisionSlider(
-                            title = "Yatay Dolgu (Padding X)",
-                            valueLabel = "${uiState.config.inPlacePaddingXdp.roundToInt()} dp",
-                            value = uiState.config.inPlacePaddingXdp,
-                            valueRange = -4f..28f,
-                            steps = 31,
-                            testTag = "sandbox_padding_x_slider",
-                            onValueChange = { onInPlacePaddingXChange(it.roundToInt().toFloat()) }
+                        Text(
+                            text = "Kaynak: ${uiState.sandboxState.recognizedText}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        SandboxPrecisionSlider(
-                            title = "Dikey Dolgu (Padding Y)",
-                            valueLabel = "${uiState.config.inPlacePaddingYdp.roundToInt()} dp",
-                            value = uiState.config.inPlacePaddingYdp,
-                            valueRange = -4f..22f,
-                            steps = 25,
-                            testTag = "sandbox_padding_y_slider",
-                            onValueChange = { onInPlacePaddingYChange(it.roundToInt().toFloat()) }
+                        Text(
+                            text = "Çeviri: ${uiState.sandboxState.translatedText}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
-                        SandboxPrecisionSlider(
-                            title = "Köşe Yuvarlatma",
-                            valueLabel = "${uiState.config.inPlaceCornerRadiusDp.roundToInt()} dp",
-                            value = uiState.config.inPlaceCornerRadiusDp,
-                            valueRange = 0f..28f,
-                            steps = 27,
-                            testTag = "sandbox_corner_radius_slider",
-                            onValueChange = { onInPlaceCornerRadiusChange(it.roundToInt().toFloat()) }
-                        )
-                        SandboxPrecisionSlider(
-                            title = "Yatay Konum (Offset X)",
-                            valueLabel = "${uiState.config.inPlaceOffsetXdp.roundToInt()} dp",
-                            value = uiState.config.inPlaceOffsetXdp,
-                            valueRange = -30f..30f,
-                            steps = 59,
-                            testTag = "sandbox_offset_x_slider",
-                            onValueChange = { onInPlaceOffsetXChange(it.roundToInt().toFloat()) }
-                        )
-                        SandboxPrecisionSlider(
-                            title = "Dikey Konum (Offset Y)",
-                            valueLabel = "${uiState.config.inPlaceOffsetYdp.roundToInt()} dp",
-                            value = uiState.config.inPlaceOffsetYdp,
-                            valueRange = -30f..30f,
-                            steps = 59,
-                            testTag = "sandbox_offset_y_slider",
-                            onValueChange = { onInPlaceOffsetYChange(it.roundToInt().toFloat()) }
-                        )
-                    } else {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Klasik Kutu Boyutu",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = CyanPrimary
-                            )
-                            TextButton(onClick = onResetClassicBoxLayout) {
-                                Text("Sıfırla")
-                            }
-                        }
-                        SandboxPrecisionSlider(
-                            title = "Kutu Genişliği",
-                            valueLabel = "${uiState.config.classicBoxWidthDp} dp",
-                            value = uiState.config.classicBoxWidthDp.toFloat(),
-                            valueRange = 200f..440f,
-                            steps = 23,
-                            testTag = "sandbox_classic_width_slider",
-                            onValueChange = { onClassicBoxWidthChange((it / 10f).roundToInt() * 10) }
-                        )
-                        SandboxPrecisionSlider(
-                            title = "Kutu Yüksekliği",
-                            valueLabel = "${uiState.config.classicBoxHeightDp} dp",
-                            value = uiState.config.classicBoxHeightDp.toFloat(),
-                            valueRange = 84f..340f,
-                            steps = 0,
-                            testTag = "sandbox_classic_height_slider",
-                            onValueChange = { onClassicBoxHeightChange((it / 8f).roundToInt() * 8) }
-                        )
-                        SandboxPrecisionSlider(
-                            title = "Kutu Arka Plan Görünürlüğü (Opaklık)",
-                            valueLabel = "%${(uiState.config.classicBoxOpacity * 100).roundToInt()}",
-                            value = uiState.config.classicBoxOpacity,
-                            valueRange = 0f..1f,
-                            steps = 0,
-                            testTag = "sandbox_classic_opacity_slider",
-                            onValueChange = onClassicBoxOpacityChange
-                        )
-                    }
-
-                    HorizontalDivider(color = ObsidianOutline)
-
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(text = "Çeviri Motoru", style = MaterialTheme.typography.labelLarge)
-                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                            TranslationEngineMode.entries.forEachIndexed { index, mode ->
-                                SegmentedButton(
-                                    selected = uiState.config.engineMode == mode,
-                                    onClick = { onSelectEngineMode(mode) },
-                                    shape = SegmentedButtonDefaults.itemShape(
-                                        index = index,
-                                        count = TranslationEngineMode.entries.size
-                                    ),
-                                    modifier = Modifier.height(48.dp)
-                                ) {
-                                    Text(
-                                        text = mode.shortLabelTr,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
                     }
                 }
             }
         }
-
-        item { Spacer(modifier = Modifier.height(12.dp)) }
     }
 }
 
 @Composable
-private fun SandboxPrecisionSlider(
-    title: String,
-    valueLabel: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    steps: Int,
-    testTag: String,
-    onValueChange: (Float) -> Unit
+private fun ClassicSandboxPreviewBox(
+    uiState: MainUiState,
+    modifier: Modifier = Modifier
 ) {
-    Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+    val boxOpacity = uiState.config.classicBoxOpacity.coerceIn(0f, 1f)
+    val fitMode = uiState.config.classicTextFitMode
+    val textColor = Color(uiState.config.subtitleTextColorArgb)
+    val maxPreviewHeightDp = if (fitMode == ClassicTextFitMode.WRAP_AND_EXPAND) {
+        245
+    } else {
+        uiState.config.classicBoxHeightDp.coerceIn(72, 195)
+    }
+
+    Surface(
+        modifier = modifier
+            .widthIn(max = uiState.config.classicBoxWidthDp.dp)
+            .fillMaxWidth()
+            .heightIn(min = 64.dp, max = maxPreviewHeightDp.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = Color(0xFF090E17).copy(alpha = boxOpacity),
+        border = BorderStroke(1.dp, CyanPrimary.copy(alpha = boxOpacity * 0.45f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text(text = title, style = MaterialTheme.typography.labelLarge)
-            Text(text = valueLabel, style = MaterialTheme.typography.labelMedium, color = CyanPrimary)
-        }
-        Slider(
-            value = value.coerceIn(valueRange.start, valueRange.endInclusive),
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            steps = steps,
-            modifier = Modifier.testTag(testTag),
-            colors = SliderDefaults.colors(
-                thumbColor = CyanPrimary,
-                activeTrackColor = CyanPrimary
+            Text(
+                text = if (uiState.sandboxState.isAiRefining) {
+                    "KLASİK KUTU • AI İYİLEŞTİRİYOR…"
+                } else {
+                    val modeTag = if (fitMode == ClassicTextFitMode.AUTO_FIT_SHRINK) "OTO-SIĞDIR" else "ESNEK"
+                    "KLASİK KUTU ($modeTag) • ${uiState.sandboxState.latencyMs}ms"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = if (uiState.sandboxState.isAiRefining) AmberTertiary else CyanPrimary
             )
-        )
+
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val density = LocalDensity.current
+                val textMeasurer = rememberTextMeasurer()
+                val availWidthPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(60)
+                val maxTextHeightPx = with(density) { (maxPreviewHeightDp - 42).coerceAtLeast(28).dp.roundToPx() }
+                val baseSize = uiState.config.fontSizeSp.coerceIn(11f, 32f)
+                val translated = uiState.sandboxState.translatedText
+
+                val effectiveSp = remember(translated, baseSize, fitMode, availWidthPx, maxTextHeightPx) {
+                    if (fitMode == ClassicTextFitMode.WRAP_AND_EXPAND) {
+                        baseSize
+                    } else {
+                        var candidate = baseSize
+                        val hasExplicitBreak = translated.contains('\n')
+                        var foundSingle = false
+                        if (!hasExplicitBreak) {
+                            while (candidate >= 11f) {
+                                val res = textMeasurer.measure(
+                                    text = translated,
+                                    style = TextStyle(
+                                        fontSize = candidate.sp,
+                                        lineHeight = (candidate * 1.24f).sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    constraints = Constraints(maxWidth = availWidthPx)
+                                )
+                                if (res.lineCount <= 1 && res.size.height <= maxTextHeightPx) {
+                                    foundSingle = true
+                                    break
+                                }
+                                candidate -= 0.5f
+                            }
+                        }
+                        if (foundSingle) {
+                            candidate
+                        } else {
+                            var multiCandidate = baseSize
+                            while (multiCandidate >= 11f) {
+                                val res = textMeasurer.measure(
+                                    text = translated,
+                                    style = TextStyle(
+                                        fontSize = multiCandidate.sp,
+                                        lineHeight = (multiCandidate * 1.26f).sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    constraints = Constraints(maxWidth = availWidthPx)
+                                )
+                                if (res.size.height <= maxTextHeightPx) {
+                                    break
+                                }
+                                multiCandidate -= 0.5f
+                            }
+                            multiCandidate.coerceAtLeast(11f)
+                        }
+                    }
+                }
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = translated,
+                        style = TextStyle(
+                            fontSize = effectiveSp.sp,
+                            lineHeight = (effectiveSp * 1.28f).sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xF504080F),
+                            drawStyle = Stroke(width = 6f, join = StrokeJoin.Round),
+                            shadow = Shadow(
+                                color = Color(0xF5000000),
+                                offset = Offset(0f, 2f),
+                                blurRadius = 6f
+                            )
+                        )
+                    )
+                    Text(
+                        text = translated,
+                        style = TextStyle(
+                            fontSize = effectiveSp.sp,
+                            lineHeight = (effectiveSp * 1.28f).sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = textColor
+                        )
+                    )
+                }
+            }
+
+            if (uiState.config.showOriginalText && uiState.sandboxState.recognizedText.isNotBlank()) {
+                Text(
+                    text = uiState.sandboxState.recognizedText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF94A3B8)
+                )
+            }
+        }
     }
 }
 

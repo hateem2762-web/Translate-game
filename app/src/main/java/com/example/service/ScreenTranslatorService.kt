@@ -158,6 +158,7 @@ class ScreenTranslatorService : Service() {
                         displayMode = config.displayMode,
                         engineMode = config.engineMode,
                         fontSizeSp = config.fontSizeSp,
+                        subtitleTextColorArgb = config.subtitleTextColorArgb,
                         inPlacePaddingXdp = config.inPlacePaddingXdp,
                         inPlacePaddingYdp = config.inPlacePaddingYdp,
                         inPlaceCornerRadiusDp = config.inPlaceCornerRadiusDp,
@@ -168,6 +169,7 @@ class ScreenTranslatorService : Service() {
                         classicBoxX = config.classicBoxX,
                         classicBoxY = config.classicBoxY,
                         classicBoxOpacity = config.classicBoxOpacity,
+                        classicTextFitMode = config.classicTextFitMode,
                         aiPreset = config.aiPreset,
                         aiModelName = config.aiModelName,
                         configuredPresets = configured
@@ -193,6 +195,7 @@ class ScreenTranslatorService : Service() {
                         displayMode = currentConfig.displayMode,
                         engineMode = currentConfig.engineMode,
                         fontSizeSp = currentConfig.fontSizeSp,
+                        subtitleTextColorArgb = currentConfig.subtitleTextColorArgb,
                         inPlacePaddingXdp = currentConfig.inPlacePaddingXdp,
                         inPlacePaddingYdp = currentConfig.inPlacePaddingYdp,
                         inPlaceCornerRadiusDp = currentConfig.inPlaceCornerRadiusDp,
@@ -203,6 +206,7 @@ class ScreenTranslatorService : Service() {
                         classicBoxX = currentConfig.classicBoxX,
                         classicBoxY = currentConfig.classicBoxY,
                         classicBoxOpacity = currentConfig.classicBoxOpacity,
+                        classicTextFitMode = currentConfig.classicTextFitMode,
                         aiPreset = currentConfig.aiPreset,
                         aiModelName = currentConfig.aiModelName,
                         configuredPresets = configured,
@@ -292,6 +296,7 @@ class ScreenTranslatorService : Service() {
                         displayMode = currentConfig.displayMode,
                         engineMode = currentConfig.engineMode,
                         fontSizeSp = currentConfig.fontSizeSp,
+                        subtitleTextColorArgb = currentConfig.subtitleTextColorArgb,
                         inPlacePaddingXdp = currentConfig.inPlacePaddingXdp,
                         inPlacePaddingYdp = currentConfig.inPlacePaddingYdp,
                         inPlaceCornerRadiusDp = currentConfig.inPlaceCornerRadiusDp,
@@ -302,6 +307,7 @@ class ScreenTranslatorService : Service() {
                         classicBoxX = currentConfig.classicBoxX,
                         classicBoxY = currentConfig.classicBoxY,
                         classicBoxOpacity = currentConfig.classicBoxOpacity,
+                        classicTextFitMode = currentConfig.classicTextFitMode,
                         aiPreset = currentConfig.aiPreset,
                         aiModelName = currentConfig.aiModelName,
                         configuredPresets = configured,
@@ -338,20 +344,48 @@ class ScreenTranslatorService : Service() {
 
                 if (!isPaused && !overlayController.isHistoryVisible()) {
                     val roi = overlayController.getActiveCaptureRoi()
-                    val croppedBitmap = if (isInPlaceWithActiveMask) {
-                        // Drain stale frames, wait for Choreographer invisible draw commit,
-                        // capture ONLY frames >= minValidTsNs, then restore overlay immediately.
-                        captureManager.drainPendingFrame()
-                        val minValidTsNs = overlayController.hideInPlaceAndAwaitCommitNs()
-                        try {
-                            captureManager.awaitAndCaptureStealthRoi(
-                                roi = roi,
-                                minValidTimestampNs = minValidTsNs,
-                                settleMs = 38L,
-                                maxWaitMs = 110L
-                            )
-                        } finally {
-                            overlayController.setInPlaceStealth(false)
+                    val cleanBitmap = if (isInPlaceWithActiveMask) {
+                        val needsImmediateResolution =
+                            pipeline.isAwaitingBlankClear() || pipeline.isStabilizingOrPending()
+                        val shouldStealthCapture = if (needsImmediateResolution) {
+                            true
+                        } else {
+                            // Passive check WITHOUT hiding overlay: compare pixels outside our drawn
+                            // blur boxes and ROI edge strips. If scene didn't change, NEVER hide or OCR!
+                            val passiveBitmap = withContext(Dispatchers.Default) {
+                                captureManager.captureCroppedRoi(roi)
+                            }
+                            if (passiveBitmap == null) {
+                                false
+                            } else {
+                                val (maskRects, maskSignature) = overlayController.getActiveMaskRectsInRoi()
+                                val changed = pipeline.hasUnmaskedVisualChange(
+                                    bitmap = passiveBitmap,
+                                    maskedRects = maskRects,
+                                    maskSignature = maskSignature
+                                )
+                                if (!changed) {
+                                    pipeline.recordPassiveSkip()
+                                }
+                                changed
+                            }
+                        }
+
+                        if (shouldStealthCapture) {
+                            captureManager.drainPendingFrame()
+                            val minValidTsNs = overlayController.hideInPlaceAndAwaitCommitNs()
+                            try {
+                                captureManager.awaitAndCaptureStealthRoi(
+                                    roi = roi,
+                                    minValidTimestampNs = minValidTsNs,
+                                    settleMs = 28L,
+                                    maxWaitMs = 90L
+                                )
+                            } finally {
+                                overlayController.setInPlaceStealth(false)
+                            }
+                        } else {
+                            null
                         }
                     } else {
                         withContext(Dispatchers.Default) {
@@ -359,14 +393,15 @@ class ScreenTranslatorService : Service() {
                         }
                     }
 
-                    if (croppedBitmap != null) {
-                        pipeline.processFrame(croppedBitmap, currentConfig)
+                    if (cleanBitmap != null) {
+                        pipeline.processFrame(cleanBitmap, currentConfig)
                     }
                 }
 
                 val loopDelay = when {
-                    isInPlaceWithActiveMask && pipeline.isAwaitingBlankClear() -> 120L
-                    isInPlaceWithActiveMask -> maxOf(currentConfig.scanIntervalMs, 380L)
+                    isInPlaceWithActiveMask &&
+                        (pipeline.isAwaitingBlankClear() || pipeline.isStabilizingOrPending()) -> 140L
+                    isInPlaceWithActiveMask -> maxOf(currentConfig.scanIntervalMs, 650L)
                     else -> currentConfig.scanIntervalMs.coerceIn(150L, 1200L)
                 }
                 delay(loopDelay)

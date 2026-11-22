@@ -147,8 +147,8 @@ class ScreenCaptureManager(
     suspend fun awaitAndCaptureStealthRoi(
         roi: RoiRect,
         minValidTimestampNs: Long = 0L,
-        settleMs: Long = 38L,
-        maxWaitMs: Long = 110L
+        settleMs: Long = 28L,
+        maxWaitMs: Long = 90L
     ): Bitmap? {
         delay(settleMs)
         val deadlineMs = System.currentTimeMillis() + (maxWaitMs - settleMs).coerceAtLeast(16L)

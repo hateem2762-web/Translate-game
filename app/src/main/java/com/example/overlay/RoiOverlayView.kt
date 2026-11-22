@@ -124,6 +124,8 @@ class RoiOverlayView(
 
     fun hasActiveInPlaceBlocks(): Boolean = inPlaceLayer.hasBlocks()
 
+    fun getActiveMaskRectsInRoi(): Pair<List<RoiRect>, Int> = inPlaceLayer.getMaskRectsAndSignature()
+
     fun setInPlaceStealth(hidden: Boolean) {
         inPlaceLayer.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
         inPlaceLayer.alpha = if (hidden) 0f else 1f
@@ -252,6 +254,31 @@ class RoiOverlayView(
         }
 
         fun hasBlocks(): Boolean = blocks.isNotEmpty()
+
+        fun getMaskRectsAndSignature(): Pair<List<RoiRect>, Int> {
+            if (blocks.isEmpty()) return emptyList<RoiRect>() to 0
+            val d = resources.displayMetrics.density
+            val marginX = ((style.paddingXdp + 8f) * d).toInt().coerceAtLeast(8)
+            val marginY = ((style.paddingYdp + 8f) * d).toInt().coerceAtLeast(8)
+            val shiftX = (style.offsetXdp * d).toInt()
+            val shiftY = (style.offsetYdp * d).toInt()
+            val rects = blocks.map { b ->
+                val box = b.boundingBox
+                RoiRect(
+                    x = (box.x + shiftX - marginX).coerceAtLeast(0),
+                    y = (box.y + shiftY - marginY).coerceAtLeast(0),
+                    width = (box.width + marginX * 2).coerceAtLeast(16),
+                    height = (box.height + marginY * 2).coerceAtLeast(16)
+                )
+            }
+            var sig = 17
+            for (b in blocks) {
+                sig = 31 * sig + b.boundingBox.hashCode()
+                sig = 31 * sig + b.translatedText.hashCode()
+            }
+            sig = 31 * sig + style.hashCode()
+            return rects to sig
+        }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)

@@ -29,7 +29,8 @@ data class InPlaceRenderStyle(
     val paddingYdp: Float = 5f,
     val cornerRadiusDp: Float = 12f,
     val offsetXdp: Float = 0f,
-    val offsetYdp: Float = 0f
+    val offsetYdp: Float = 0f,
+    val textColorArgb: Int = Color.WHITE
 ) {
     companion object {
         fun fromTelemetry(t: TranslatorTelemetry): InPlaceRenderStyle = InPlaceRenderStyle(
@@ -38,7 +39,8 @@ data class InPlaceRenderStyle(
             paddingYdp = t.inPlacePaddingYdp,
             cornerRadiusDp = t.inPlaceCornerRadiusDp,
             offsetXdp = t.inPlaceOffsetXdp,
-            offsetYdp = t.inPlaceOffsetYdp
+            offsetYdp = t.inPlaceOffsetYdp,
+            textColorArgb = t.subtitleTextColorArgb
         )
     }
 }
@@ -210,6 +212,8 @@ class InPlaceCanvasRenderer(context: Context) {
             .filter { it.translatedText.isNotBlank() }
             .sortedWith(compareBy<InPlaceBlock> { it.boundingBox.y }.thenBy { it.boundingBox.x })
         if (visibleBlocks.isEmpty() || canvasWidth <= 0 || canvasHeight <= 0) return
+
+        fillTextPaint.color = style.textColorArgb
 
         val padX = style.paddingXdp * density
         val rawPadY = style.paddingYdp * density

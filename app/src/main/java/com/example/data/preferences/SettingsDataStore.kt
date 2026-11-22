@@ -11,8 +11,10 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.model.AiProviderPreset
+import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
 import com.example.model.RoiRect
+import com.example.model.SubtitleColorPreset
 import com.example.model.TranslationConfig
 import com.example.model.TranslationEngineMode
 import com.google.mlkit.nl.translate.TranslateLanguage
@@ -35,6 +37,7 @@ class SettingsDataStore(private val context: Context) {
         val ENGINE_MODE = stringPreferencesKey("engine_mode")
         val LEGACY_FONT_SIZE = stringPreferencesKey("font_size")
         val FONT_SIZE_SP = floatPreferencesKey("font_size_sp")
+        val SUBTITLE_TEXT_COLOR_ARGB = intPreferencesKey("subtitle_text_color_argb")
 
         val IN_PLACE_PADDING_X = floatPreferencesKey("in_place_padding_x_dp")
         val IN_PLACE_PADDING_Y = floatPreferencesKey("in_place_padding_y_dp")
@@ -47,6 +50,7 @@ class SettingsDataStore(private val context: Context) {
         val CLASSIC_BOX_X = intPreferencesKey("classic_box_x")
         val CLASSIC_BOX_Y = intPreferencesKey("classic_box_y")
         val CLASSIC_BOX_OPACITY = floatPreferencesKey("classic_box_opacity")
+        val CLASSIC_TEXT_FIT_MODE = stringPreferencesKey("classic_text_fit_mode")
 
         val AI_PRESET = stringPreferencesKey("ai_preset")
         val LEGACY_AI_API_KEY = stringPreferencesKey("ai_api_key")
@@ -132,17 +136,24 @@ class SettingsDataStore(private val context: Context) {
             else -> 18f
         }
         val fontSizeSp = (prefs[Keys.FONT_SIZE_SP] ?: migratedLegacySp).coerceIn(12f, 32f)
+        val subtitleColorArgb = prefs[Keys.SUBTITLE_TEXT_COLOR_ARGB] ?: SubtitleColorPreset.PURE_WHITE.argb
+        val classicTextFitMode = runCatching {
+            ClassicTextFitMode.valueOf(
+                prefs[Keys.CLASSIC_TEXT_FIT_MODE] ?: ClassicTextFitMode.WRAP_AND_EXPAND.name
+            )
+        }.getOrDefault(ClassicTextFitMode.WRAP_AND_EXPAND)
 
         TranslationConfig(
             sourceLangCode = prefs[Keys.SOURCE_LANG] ?: TranslateLanguage.ENGLISH,
             targetLangCode = prefs[Keys.TARGET_LANG] ?: TranslateLanguage.TURKISH,
             debounceMs = prefs[Keys.DEBOUNCE_MS] ?: 350L,
-            scanIntervalMs = prefs[Keys.SCAN_INTERVAL_MS] ?: 300L,
+            scanIntervalMs = prefs[Keys.SCAN_INTERVAL_MS] ?: 350L,
             overlayOpacity = prefs[Keys.OVERLAY_OPACITY] ?: 0.86f,
             showOriginalText = prefs[Keys.SHOW_ORIGINAL] ?: false,
             displayMode = displayMode,
             engineMode = engineMode,
             fontSizeSp = fontSizeSp,
+            subtitleTextColorArgb = subtitleColorArgb,
             inPlacePaddingXdp = (prefs[Keys.IN_PLACE_PADDING_X] ?: 10f).coerceIn(-4f, 28f),
             inPlacePaddingYdp = (prefs[Keys.IN_PLACE_PADDING_Y] ?: 5f).coerceIn(-4f, 22f),
             inPlaceCornerRadiusDp = (prefs[Keys.IN_PLACE_CORNER_RADIUS] ?: 12f).coerceIn(0f, 28f),
@@ -153,6 +164,7 @@ class SettingsDataStore(private val context: Context) {
             classicBoxX = prefs[Keys.CLASSIC_BOX_X] ?: -1,
             classicBoxY = prefs[Keys.CLASSIC_BOX_Y] ?: -1,
             classicBoxOpacity = (prefs[Keys.CLASSIC_BOX_OPACITY] ?: 0.86f).coerceIn(0f, 1f),
+            classicTextFitMode = classicTextFitMode,
             aiPreset = preset,
             aiApiKey = activeApiKey,
             aiApiKeys = isolatedKeys,
@@ -197,6 +209,14 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun updateFontSizeSp(fontSizeSp: Float) {
         context.dataStore.edit { it[Keys.FONT_SIZE_SP] = fontSizeSp.coerceIn(12f, 32f) }
+    }
+
+    suspend fun updateSubtitleTextColorArgb(argb: Int) {
+        context.dataStore.edit { it[Keys.SUBTITLE_TEXT_COLOR_ARGB] = 0xFF000000.toInt() or argb }
+    }
+
+    suspend fun updateClassicTextFitMode(mode: ClassicTextFitMode) {
+        context.dataStore.edit { it[Keys.CLASSIC_TEXT_FIT_MODE] = mode.name }
     }
 
     suspend fun updateInPlacePaddingX(dp: Float) {

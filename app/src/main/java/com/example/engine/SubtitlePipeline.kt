@@ -98,6 +98,19 @@ class SubtitlePipeline(
 
     fun isAwaitingBlankClear(): Boolean = consecutiveBlankFrames > 0
 
+    fun isStabilizingOrPending(): Boolean =
+        _output.value.isStabilizing || pendingCandidate.isNotEmpty() || debounceJob?.isActive == true
+
+    fun hasUnmaskedVisualChange(
+        bitmap: Bitmap,
+        maskedRects: List<com.example.model.RoiRect>,
+        maskSignature: Int
+    ): Boolean = frameDiffer.hasUnmaskedVisualChange(bitmap, maskedRects, maskSignature)
+
+    fun recordPassiveSkip() {
+        _output.value = _output.value.copy(framesSkipped = _output.value.framesSkipped + 1)
+    }
+
     suspend fun processFrame(bitmap: Bitmap, config: TranslationConfig) {
         val current = _output.value
 

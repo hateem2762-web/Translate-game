@@ -182,4 +182,57 @@ class ModelCatalogAndDataStoreTest {
 
         scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
+
+    @Test
+    fun `RoiFrameDiffer ignores changes inside masked blur rect and detects outer edge change`() {
+        val differ = com.example.engine.RoiFrameDiffer()
+        val maskRect = com.example.model.RoiRect(x = 30, y = 20, width = 140, height = 60)
+        val masked = listOf(maskRect)
+
+        fun buildFrame(bgColor: Int, insideMaskColor: Int): android.graphics.Bitmap {
+            val bmp = android.graphics.Bitmap.createBitmap(200, 100, android.graphics.Bitmap.Config.ARGB_8888)
+            bmp.eraseColor(bgColor)
+            for (y in 20..80) {
+                for (x in 30..170) {
+                    bmp.setPixel(x, y, insideMaskColor)
+                }
+            }
+            return bmp
+        }
+
+        // 1. Initial call establishes baseline -> returns false (no immediate flicker)
+        val baseFrame = buildFrame(bgColor = android.graphics.Color.rgb(16, 20, 30), insideMaskColor = android.graphics.Color.WHITE)
+        assertFalse(differ.hasUnmaskedVisualChange(baseFrame, masked, maskSignature = 101))
+
+        // 2. Pixels strictly INSIDE the blur box change drastically, outside stays identical -> MUST return false
+        val innerChangedFrame = buildFrame(bgColor = android.graphics.Color.rgb(16, 20, 30), insideMaskColor = android.graphics.Color.CYAN)
+        assertFalse(differ.hasUnmaskedVisualChange(innerChangedFrame, masked, maskSignature = 101))
+
+        // 3. Changing maskSignature re-establishes baseline without triggering false change
+        assertFalse(differ.hasUnmaskedVisualChange(innerChangedFrame, masked, maskSignature = 202))
+
+        // 4. Outer unmasked background / edge changes -> MUST return true
+        val outerChangedFrame = buildFrame(bgColor = android.graphics.Color.rgb(210, 210, 210), insideMaskColor = android.graphics.Color.CYAN)
+        assertTrue(differ.hasUnmaskedVisualChange(outerChangedFrame, masked, maskSignature = 202))
+    }
+
+    @Test
+    fun `SettingsDataStore persists subtitle text color and classic fit mode`(): Unit = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = SettingsDataStore(context)
+
+        store.updateSubtitleTextColorArgb(com.example.model.SubtitleColorPreset.CINEMA_GOLD.argb)
+        store.updateClassicTextFitMode(com.example.model.ClassicTextFitMode.AUTO_FIT_SHRINK)
+
+        val config = store.configFlow.first()
+        assertEquals(com.example.model.SubtitleColorPreset.CINEMA_GOLD.argb, config.subtitleTextColorArgb)
+        assertEquals(com.example.model.ClassicTextFitMode.AUTO_FIT_SHRINK, config.classicTextFitMode)
+
+        store.updateSubtitleTextColorArgb(0xFF93C5FD.toInt())
+        store.updateClassicTextFitMode(com.example.model.ClassicTextFitMode.WRAP_AND_EXPAND)
+
+        val updated = store.configFlow.first()
+        assertEquals(0xFF93C5FD.toInt(), updated.subtitleTextColorArgb)
+        assertEquals(com.example.model.ClassicTextFitMode.WRAP_AND_EXPAND, updated.classicTextFitMode)
+    }
 }
