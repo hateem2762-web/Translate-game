@@ -9,6 +9,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -55,6 +58,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -534,15 +539,23 @@ private fun LaunchControlCard(
                 onGrantClick = onRequestNotificationPermission
             )
 
-            if (uiState.config.engineMode == TranslationEngineMode.OFFLINE_LOCAL &&
+            if ((uiState.config.engineMode == TranslationEngineMode.OFFLINE_LOCAL ||
+                    uiState.config.engineMode == TranslationEngineMode.HYBRID) &&
                 uiState.modelState == ModelDownloadState.NOT_DOWNLOADED
             ) {
-                WarningBanner("Çevrimdışı çeviri için aşağıdan dil paketini indirmeniz önerilir.")
-            } else if (uiState.config.engineMode == TranslationEngineMode.SMART_AI &&
+                WarningBanner(
+                    if (uiState.config.engineMode == TranslationEngineMode.HYBRID) {
+                        "Hibrit anlık önizleme için aşağıdan çevrimdışı dil paketini indirmeniz önerilir."
+                    } else {
+                        "Çevrimdışı çeviri için aşağıdan dil paketini indirmeniz önerilir."
+                    }
+                )
+            } else if ((uiState.config.engineMode == TranslationEngineMode.SMART_AI ||
+                    uiState.config.engineMode == TranslationEngineMode.HYBRID) &&
                 uiState.config.aiPreset.requiresUserApiKey &&
                 uiState.config.aiApiKey.isBlank()
             ) {
-                WarningBanner("Özel uç nokta seçili: Aşağıdaki Motor kartından API anahtarı girin.")
+                WarningBanner("${uiState.config.aiPreset.shortLabelTr} seçili: Aşağıdaki Motor kartından API anahtarı girin.")
             } else if (uiState.config.engineMode == TranslationEngineMode.LIBRETRANSLATE &&
                 uiState.config.libreEndpointUrl.isBlank()
             ) {
@@ -613,6 +626,7 @@ private fun WarningBanner(message: String) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DisplayAndEngineModeCard(
     uiState: MainUiState,
@@ -901,27 +915,18 @@ private fun DisplayAndEngineModeCard(
                                 index = index,
                                 count = TranslationEngineMode.entries.size
                             ),
-                            icon = {
-                                Icon(
-                                    imageVector = when (mode) {
-                                        TranslationEngineMode.OFFLINE_LOCAL -> Icons.Rounded.OfflineBolt
-                                        TranslationEngineMode.SMART_AI -> Icons.Rounded.AutoAwesome
-                                        TranslationEngineMode.LIBRETRANSLATE -> Icons.Rounded.Translate
-                                    },
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            },
                             modifier = Modifier
                                 .height(48.dp)
                                 .testTag("engine_mode_${mode.name.lowercase()}"),
                             colors = SegmentedButtonDefaults.colors(
                                 activeContainerColor = when (mode) {
+                                    TranslationEngineMode.HYBRID -> Color(0xFFA78BFA).copy(alpha = 0.22f)
                                     TranslationEngineMode.SMART_AI -> AmberTertiary.copy(alpha = 0.22f)
                                     TranslationEngineMode.LIBRETRANSLATE -> Color(0xFF34D399).copy(alpha = 0.22f)
                                     TranslationEngineMode.OFFLINE_LOCAL -> CyanContainer
                                 },
                                 activeContentColor = when (mode) {
+                                    TranslationEngineMode.HYBRID -> Color(0xFFA78BFA)
                                     TranslationEngineMode.SMART_AI -> AmberTertiary
                                     TranslationEngineMode.LIBRETRANSLATE -> Color(0xFF34D399)
                                     TranslationEngineMode.OFFLINE_LOCAL -> CyanPrimary
@@ -933,9 +938,11 @@ private fun DisplayAndEngineModeCard(
                             Text(
                                 text = when (mode) {
                                     TranslationEngineMode.OFFLINE_LOCAL -> stringResource(R.string.engine_mode_offline)
+                                    TranslationEngineMode.HYBRID -> stringResource(R.string.engine_mode_hybrid)
                                     TranslationEngineMode.SMART_AI -> stringResource(R.string.engine_mode_ai)
                                     TranslationEngineMode.LIBRETRANSLATE -> stringResource(R.string.engine_mode_libre)
                                 },
+                                style = MaterialTheme.typography.labelMedium,
                                 maxLines = 1,
                                 softWrap = false,
                                 overflow = TextOverflow.Ellipsis
@@ -945,8 +952,10 @@ private fun DisplayAndEngineModeCard(
                 }
                 Text(
                     text = when (uiState.config.engineMode) {
+                        TranslationEngineMode.HYBRID ->
+                            "Sıfır bekleme: 50ms içinde Yerel çeviriyi gösterir, arka planda hızlı AI ile pürüzsüzce düzeltir."
                         TranslationEngineMode.SMART_AI ->
-                            "Bağlam duyarlı LLM çevirisi (2.4 sn kota koruma aralığı + benzerlik önbelleği ile düşük kota tüketimi)."
+                            "Durumsuz ultra hızlı LLM çevirisi (Groq / Cerebras / Gemini Düşünme=0, max 120 token, %92 önbellek)."
                         TranslationEngineMode.LIBRETRANSLATE ->
                             "Açık kaynak LibreTranslate (kendi sunucunuz veya herhangi bir örnek). Toplu satır ve önbellek desteği."
                         TranslationEngineMode.OFFLINE_LOCAL ->
@@ -957,7 +966,10 @@ private fun DisplayAndEngineModeCard(
                 )
             }
 
-            AnimatedVisibility(visible = uiState.config.engineMode == TranslationEngineMode.SMART_AI) {
+            AnimatedVisibility(
+                visible = uiState.config.engineMode == TranslationEngineMode.SMART_AI ||
+                    uiState.config.engineMode == TranslationEngineMode.HYBRID
+            ) {
                 Column(
                     modifier = Modifier.padding(top = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -969,7 +981,7 @@ private fun DisplayAndEngineModeCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "AI Sağlayıcı Ayarları",
+                            text = "Ultra Hızlı AI Sağlayıcı Ayarları",
                             style = MaterialTheme.typography.labelLarge,
                             color = AmberTertiary
                         )
@@ -992,63 +1004,80 @@ private fun DisplayAndEngineModeCard(
                         }
                     }
 
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        AiProviderPreset.entries.forEachIndexed { index, preset ->
-                            SegmentedButton(
-                                selected = uiState.config.aiPreset == preset,
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        AiProviderPreset.entries.forEach { preset ->
+                            val selected = uiState.config.aiPreset == preset
+                            FilterChip(
+                                selected = selected,
                                 onClick = { onSelectAiPreset(preset) },
-                                shape = SegmentedButtonDefaults.itemShape(
-                                    index = index,
-                                    count = AiProviderPreset.entries.size
-                                ),
+                                label = {
+                                    Text(
+                                        text = preset.shortLabelTr,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1
+                                    )
+                                },
                                 modifier = Modifier
-                                    .height(48.dp)
-                                    .testTag("ai_preset_${preset.name.lowercase()}")
-                            ) {
-                                Text(
-                                    text = preset.shortLabelTr,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    overflow = TextOverflow.Ellipsis
+                                    .heightIn(min = 48.dp)
+                                    .testTag("ai_preset_${preset.name.lowercase()}"),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = AmberTertiary.copy(alpha = 0.22f),
+                                    selectedLabelColor = AmberTertiary
                                 )
-                            }
+                            )
                         }
                     }
 
-                    val isGeminiPreset = !uiState.config.aiPreset.requiresUserApiKey
-                    if (isGeminiPreset) {
-                        val hasGeminiKey = aiApiKeyDraft.isNotBlank()
-                        val activeModelHint = if (hasGeminiKey) {
-                            "Gemini API anahtarı ile doğrudan bağlanılıyor. Kota koruma: 2.4 sn istek aralığı + noktalama filtresi + %92 benzerlik önbelleği aktif."
+                    val activePreset = uiState.config.aiPreset
+                    val isGeminiPreset = !activePreset.requiresUserApiKey
+                    val presetInfoText = when (activePreset) {
+                        AiProviderPreset.GROQ ->
+                            "Groq: Ücretsiz katmanda ~150–350ms ultra hızlı yanıt. Önerilen: llama-3.3-70b-versatile veya qwen-qwq-32b."
+                        AiProviderPreset.CEREBRAS ->
+                            "Cerebras: Ücretsiz katmanda saniyede 2000+ token hızında sıfıra yakın gecikme (llama-3.3-70b)."
+                        AiProviderPreset.OPENROUTER ->
+                            "OpenRouter: Ücretsiz (:free) veya ücretli yüzlerce model tek anahtarla."
+                        AiProviderPreset.GEMINI_FLASH -> if (aiApiKeyDraft.isNotBlank()) {
+                            "Gemini Flash: Düşünme bütçesi (thinkingBudget=0) kapalı, minimum gecikme modu aktif."
                         } else {
-                            "Firebase AI Logic hazır (google-services.json yapılandırıldı). Kota koruma: 2.4 sn istek aralığı + %92 benzerlik önbelleği aktif; daha yüksek limit için Flash-Lite seçebilirsiniz."
+                            "Firebase AI Logic hazır (google-services.json yapılandırıldı). API anahtarı eklerseniz thinkingBudget=0 modu da aktif olur."
                         }
-                        val hintColor = EmeraldSuccess
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = hintColor.copy(alpha = 0.12f),
-                            border = BorderStroke(1.dp, hintColor.copy(alpha = 0.35f))
+                        AiProviderPreset.GEMINI_LITE -> if (aiApiKeyDraft.isNotBlank()) {
+                            "Gemini Flash-Lite: Düşünme=0 + en yüksek ücretsiz kota verimliliği."
+                        } else {
+                            "Firebase AI Logic Flash-Lite hazır. %92 benzerlik önbelleği + titreşim koruması aktif."
+                        }
+                        AiProviderPreset.OPENAI_COMPATIBLE ->
+                            "OpenAI uyumlu herhangi bir yerel veya bulut Chat Completions uç noktasını bağlayın."
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = EmeraldSuccess.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.35f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.CheckCircle,
-                                    contentDescription = null,
-                                    tint = hintColor,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = activeModelHint,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = hintColor
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Rounded.Bolt,
+                                contentDescription = null,
+                                tint = EmeraldSuccess,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = presetInfoText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = EmeraldSuccess
+                            )
                         }
                     }
 
@@ -1057,11 +1086,28 @@ private fun DisplayAndEngineModeCard(
                         onValueChange = onAiApiKeyChange,
                         label = {
                             Text(
-                                if (isGeminiPreset) "Gemini API Anahtarı (önerilir, anında kaydedilir)"
-                                else "API Anahtarı (anında kaydedilir)"
+                                when (activePreset) {
+                                    AiProviderPreset.GROQ -> "Groq API Anahtarı (gsk_...)"
+                                    AiProviderPreset.CEREBRAS -> "Cerebras API Anahtarı (csk-...)"
+                                    AiProviderPreset.OPENROUTER -> "OpenRouter API Anahtarı (sk-or-...)"
+                                    AiProviderPreset.GEMINI_FLASH,
+                                    AiProviderPreset.GEMINI_LITE -> "Gemini API Anahtarı (isteğe bağlı, önerilir)"
+                                    AiProviderPreset.OPENAI_COMPATIBLE -> "API Anahtarı (anında kaydedilir)"
+                                }
                             )
                         },
-                        placeholder = { Text(if (isGeminiPreset) "AIza..." else "gsk_... / sk-...") },
+                        placeholder = {
+                            Text(
+                                when (activePreset) {
+                                    AiProviderPreset.GROQ -> "gsk_..."
+                                    AiProviderPreset.CEREBRAS -> "csk-..."
+                                    AiProviderPreset.OPENROUTER -> "sk-or-v1-..."
+                                    AiProviderPreset.GEMINI_FLASH,
+                                    AiProviderPreset.GEMINI_LITE -> "AIza..."
+                                    AiProviderPreset.OPENAI_COMPATIBLE -> "sk-..."
+                                }
+                            )
+                        },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(
                             autoCorrectEnabled = false,
@@ -1099,6 +1145,46 @@ private fun DisplayAndEngineModeCard(
                             .fillMaxWidth()
                             .testTag("ai_model_input")
                     )
+
+                    val quickModels = when (activePreset) {
+                        AiProviderPreset.GROQ -> listOf(
+                            "llama-3.3-70b-versatile",
+                            "qwen-qwq-32b",
+                            "llama-3.1-8b-instant"
+                        )
+                        AiProviderPreset.CEREBRAS -> listOf(
+                            "llama-3.3-70b",
+                            "llama3.1-8b",
+                            "qwen-3-32b"
+                        )
+                        AiProviderPreset.OPENROUTER -> listOf(
+                            "meta-llama/llama-3.3-70b-instruct:free",
+                            "google/gemini-2.0-flash-exp:free"
+                        )
+                        else -> emptyList()
+                    }
+                    if (quickModels.isNotEmpty()) {
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            quickModels.forEach { modelId ->
+                                FilterChip(
+                                    selected = aiModelDraft == modelId,
+                                    onClick = { onAiModelChange(modelId) },
+                                    label = {
+                                        Text(
+                                            text = modelId,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1
+                                        )
+                                    },
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                )
+                            }
+                        }
+                    }
 
                     if (!isGeminiPreset) {
                         OutlinedTextField(
@@ -1627,10 +1713,10 @@ private fun PipelineTuningCard(
 
             SliderSettingRow(
                 title = "Metin Sabitleme (Debounce)",
-                subtitle = "Harf harf akan yazılar sabitlenince çevirir",
+                subtitle = "Harf harf akan yazılar sabitlenince çevirir (AI için 200-350 ms önerilir)",
                 valueLabel = "${uiState.config.debounceMs} ms",
                 value = uiState.config.debounceMs.toFloat(),
-                valueRange = 200f..1000f,
+                valueRange = 150f..1000f,
                 testTag = "debounce_slider",
                 onValueChange = { onDebounceChange((it / 50f).roundToInt() * 50L) }
             )
@@ -1877,12 +1963,14 @@ private fun SubtitleHistoryCard(entry: SubtitleEntry) {
             ) {
                 val badgeText = when {
                     entry.fromCache -> "ÖNBELLEK (${entry.engineMode.shortLabelTr})"
+                    entry.engineMode == TranslationEngineMode.HYBRID -> "HİBRİT"
                     entry.engineMode == TranslationEngineMode.SMART_AI -> "AKILLI AI"
                     entry.engineMode == TranslationEngineMode.LIBRETRANSLATE -> "LIBRETRANSLATE"
                     else -> "HIZLI YEREL"
                 }
                 val badgeColor = when {
                     entry.fromCache -> EmeraldSuccess
+                    entry.engineMode == TranslationEngineMode.HYBRID -> Color(0xFFA78BFA)
                     entry.engineMode == TranslationEngineMode.SMART_AI -> AmberTertiary
                     entry.engineMode == TranslationEngineMode.LIBRETRANSLATE -> Color(0xFF34D399)
                     else -> CyanPrimary

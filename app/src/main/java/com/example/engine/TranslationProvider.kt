@@ -69,7 +69,7 @@ class SmartAiTranslationProvider(
             modelName = AiProviderPreset.GEMINI_FLASH.defaultModel,
             generationConfig = generationConfig {
                 temperature = 0.2f
-                maxOutputTokens = 512
+                maxOutputTokens = MAX_OUTPUT_TOKENS
             }
         )
     }
@@ -79,7 +79,7 @@ class SmartAiTranslationProvider(
             modelName = AiProviderPreset.GEMINI_LITE.defaultModel,
             generationConfig = generationConfig {
                 temperature = 0.2f
-                maxOutputTokens = 512
+                maxOutputTokens = MAX_OUTPUT_TOKENS
             }
         )
     }
@@ -88,10 +88,17 @@ class SmartAiTranslationProvider(
 
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .writeTimeout(10, TimeUnit.SECONDS)
-            .callTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .writeTimeout(5, TimeUnit.SECONDS)
+            .callTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private val geminiRestClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(20, TimeUnit.SECONDS)
+            .callTimeout(25, TimeUnit.SECONDS)
             .build()
     }
 
@@ -100,8 +107,11 @@ class SmartAiTranslationProvider(
             AiProviderPreset.GEMINI_FLASH,
             AiProviderPreset.GEMINI_LITE ->
                 config.aiApiKey.isNotBlank() || ensureFirebaseInitialized(appContext)
+            AiProviderPreset.GROQ,
+            AiProviderPreset.CEREBRAS,
+            AiProviderPreset.OPENROUTER,
             AiProviderPreset.OPENAI_COMPATIBLE ->
-                config.aiApiKey.isNotBlank() && isValidHttpsUrl(config.aiEndpointUrl)
+                config.aiApiKey.isNotBlank() && isValidHttpsUrl(resolveChatEndpoint(config))
         }
     }
 
@@ -120,9 +130,8 @@ class SmartAiTranslationProvider(
 
         enforceCooldownIfActive(bypassCooldown = false)
 
-        val sourceName = SupportedLanguage.fromCode(config.sourceLangCode).englishName
-        val targetName = SupportedLanguage.fromCode(config.targetLangCode).englishName
-        val systemPrompt = buildSystemPrompt(sourceName, targetName, isBatch = true)
+        val targetLangTr = SupportedLanguage.fromCode(config.targetLangCode).displayNameTr
+        val systemPrompt = buildSystemPrompt(targetLangTr = targetLangTr, isBatch = true)
 
         val numberedInput = texts.mapIndexed { idx, line -> "[${idx + 1}] $line" }.joinToString("\n")
         val rawOutput = dispatchAiPrompt(systemPrompt, numberedInput, config)
@@ -138,30 +147,9 @@ class SmartAiTranslationProvider(
         if (text.isBlank() || config.sourceLangCode == config.targetLangCode) return text
         enforceCooldownIfActive(bypassCooldown)
 
-        val sourceName = SupportedLanguage.fromCode(config.sourceLangCode).englishName
-        val targetName = SupportedLanguage.fromCode(config.targetLangCode).englishName
-
-        val systemPrompt = buildSystemPrompt(sourceName, targetName, isBatch = false)
+        val targetLangTr = SupportedLanguage.fromCode(config.targetLangCode).displayNameTr
+        val systemPrompt = buildSystemPrompt(targetLangTr = targetLangTr, isBatch = false)
         return dispatchAiPrompt(systemPrompt, text, config)
-    }
-
-    private fun buildSystemPrompt(sourceName: String, targetName: String, isBatch: Boolean): String {
-        val chineseGuidance = if (sourceName == "Chinese") {
-            " The source is Simplified or Traditional Chinese game dialogue without spaces—interpret Chinese idioms, wuxia/fantasy/RPG terms, and UI phrases naturally."
-        } else {
-            ""
-        }
-        return if (isBatch) {
-            "You are a professional video game dialogue and UI translator. " +
-                "Translate each numbered $sourceName line into natural, idiomatic $targetName " +
-                "matching the game's tone.$chineseGuidance Keep each line concise for subtitle boxes. " +
-                "Return ONLY the exact same numbered format ([1] ..., [2] ...) with no extra text."
-        } else {
-            "You are a professional video game dialogue and UI translator. " +
-                "Translate the user's $sourceName game text into natural, idiomatic $targetName " +
-                "matching the game's tone.$chineseGuidance Keep it concise so it fits cleanly inside subtitle boxes. " +
-                "Output ONLY the translated text with no quotes, labels, or explanations."
-        }
     }
 
     private suspend fun dispatchAiPrompt(
@@ -182,12 +170,15 @@ class SmartAiTranslationProvider(
                 preferLite = true,
                 config = config
             )
+            AiProviderPreset.GROQ,
+            AiProviderPreset.CEREBRAS,
+            AiProviderPreset.OPENROUTER,
             AiProviderPreset.OPENAI_COMPATIBLE -> {
                 val apiKey = config.aiApiKey.trim()
                 if (apiKey.isEmpty()) {
-                    throw IllegalStateException("Özel API uç noktası için API anahtarı girin.")
+                    throw IllegalStateException("${config.aiPreset.shortLabelTr} için API anahtarı girin.")
                 }
-                val endpoint = config.aiEndpointUrl.trim().ifEmpty { config.aiPreset.defaultBaseUrl }
+                val endpoint = resolveChatEndpoint(config)
                 if (!isValidHttpsUrl(endpoint)) {
                     throw IllegalArgumentException("Geçerli bir HTTPS API uç noktası girin.")
                 }
@@ -200,9 +191,8 @@ class SmartAiTranslationProvider(
     }
 
     /**
-     * Gemini entry point. If the user pasted a Gemini API key we talk to the Gemini REST API
-     * directly, which needs no Firebase / google-services.json at all. Without a key we fall back
-     * to Firebase AI Logic (which does need google-services.json).
+     * Gemini entry point. With an API key, calls the Gemini REST API directly with `thinkingBudget: 0`
+     * for minimum latency. Without a key, routes via Firebase AI Logic + App Check.
      */
     private suspend fun callGemini(
         systemPrompt: String,
@@ -227,14 +217,27 @@ class SmartAiTranslationProvider(
         val preset = if (preferLite) AiProviderPreset.GEMINI_LITE else AiProviderPreset.GEMINI_FLASH
         val model = config.aiModelName.trim().ifEmpty { preset.defaultModel }
         try {
-            return withContext(Dispatchers.IO) { requestGeminiRest(model, apiKey, systemPrompt, text) }
+            return withContext(Dispatchers.IO) {
+                try {
+                    requestGeminiRest(model, apiKey, systemPrompt, text, disableThinking = true)
+                } catch (e: IOException) {
+                    // Fallback gracefully if a custom Gemini model ID rejects thinkingConfig
+                    if (e.message?.contains("thinking", ignoreCase = true) == true) {
+                        requestGeminiRest(model, apiKey, systemPrompt, text, disableThinking = false)
+                    } else {
+                        throw e
+                    }
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: AiQuotaExceededException) {
             val liteModel = AiProviderPreset.GEMINI_LITE.defaultModel
             if (!preferLite && model != liteModel) {
                 Log.w(TAG, "$model quota hit, falling back to $liteModel")
-                return withContext(Dispatchers.IO) { requestGeminiRest(liteModel, apiKey, systemPrompt, text) }
+                return withContext(Dispatchers.IO) {
+                    requestGeminiRest(liteModel, apiKey, systemPrompt, text, disableThinking = false)
+                }
             }
             throw e
         }
@@ -244,8 +247,16 @@ class SmartAiTranslationProvider(
         model: String,
         apiKey: String,
         systemPrompt: String,
-        text: String
+        text: String,
+        disableThinking: Boolean
     ): String {
+        val genConfig = JSONObject()
+            .put("temperature", 0.2)
+            .put("maxOutputTokens", MAX_OUTPUT_TOKENS)
+        if (disableThinking) {
+            genConfig.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+        }
+
         val payload = JSONObject().apply {
             put(
                 "systemInstruction",
@@ -256,13 +267,10 @@ class SmartAiTranslationProvider(
                 JSONArray().put(
                     JSONObject()
                         .put("role", "user")
-                        .put("parts", JSONArray().put(JSONObject().put("text", "Game text:\n$text")))
+                        .put("parts", JSONArray().put(JSONObject().put("text", text)))
                 )
             )
-            put(
-                "generationConfig",
-                JSONObject().put("temperature", 0.2).put("maxOutputTokens", 2048)
-            )
+            put("generationConfig", genConfig)
         }
 
         val request = Request.Builder()
@@ -272,8 +280,7 @@ class SmartAiTranslationProvider(
             .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
-        val geminiClient = client.newBuilder().callTimeout(40, TimeUnit.SECONDS).readTimeout(35, TimeUnit.SECONDS).build()
-        geminiClient.newCall(request).execute().use { response ->
+        geminiRestClient.newCall(request).execute().use { response ->
             val rawBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 val apiMsg = runCatching {
@@ -284,11 +291,11 @@ class SmartAiTranslationProvider(
                     429 -> {
                         quotaCooldownUntilMs.set(System.currentTimeMillis() + QUOTA_COOLDOWN_MS)
                         throw AiQuotaExceededException(
-                            "Gemini kotası doldu (429). Bir süre bekleyin, Hızlı Yerel / LibreTranslate moduna geçin veya başka bir anahtar kullanın."
+                            "Gemini kotası doldu (429). Groq/Cerebras seçin, Hızlı Yerel / LibreTranslate moduna geçin veya bekleyin."
                         )
                     }
                     400, 401, 403 -> throw IOException(
-                        "Gemini API anahtarı geçersiz veya yetkisiz (${response.code}). ${apiMsg.orEmpty()}".trim()
+                        "Gemini API isteği/anahtarı reddedildi (${response.code}): ${apiMsg.orEmpty()}".trim()
                     )
                     404 -> throw IOException(
                         "Gemini modeli bulunamadı: \"$model\". Model Kimliği alanına geçerli bir model yazın (ör. gemini-2.5-flash)."
@@ -325,12 +332,10 @@ class SmartAiTranslationProvider(
     ): String {
         if (!ensureFirebaseInitialized(appContext)) {
             throw IOException(
-                "Firebase kullanılamıyor (google-services.json yok). " +
-                    "Çözüm: Motor kartındaki \"Gemini API Anahtarı\" alanına ücretsiz anahtarınızı yapıştırın " +
-                    "(aistudio.google.com/apikey) — Firebase gerekmez. Alternatif: LibreTranslate veya Hızlı Yerel."
+                "Firebase başlatılamadı (google-services.json eksik). Groq/Cerebras veya Gemini API anahtarı girebilirsiniz."
             )
         }
-        val prompt = "$systemPrompt\n\nGame text:\n$text"
+        val prompt = "$systemPrompt\n\n$text"
         val primaryModel = if (preferLite) geminiLiteModel else geminiFlashModel
 
         try {
@@ -376,7 +381,7 @@ class SmartAiTranslationProvider(
         if (isQuotaError(e)) {
             quotaCooldownUntilMs.set(System.currentTimeMillis() + QUOTA_COOLDOWN_MS)
             return AiQuotaExceededException(
-                "Gemini ücretsiz/proje kotası doldu (429). Bir süre bekleyin, Hızlı Yerel (ML Kit) kotasız moda geçin veya Özel API (ör. Groq) kullanın."
+                "Gemini ücretsiz/proje kotası doldu (429). Groq/Cerebras (ücretsiz) veya Hızlı Yerel (ML Kit) kullanabilirsiniz."
             )
         }
         return IOException(e.localizedMessage ?: "Gemini AI çevirisi başarısız.")
@@ -388,7 +393,7 @@ class SmartAiTranslationProvider(
         if (remainingMs > 0L) {
             val sec = ((remainingMs + 999L) / 1000L).coerceAtLeast(1L)
             throw AiQuotaExceededException(
-                "Gemini kota beklemesi aktif (${sec}s). Kotasız kullanım için Hızlı Yerel (ML Kit) moda geçebilirsiniz."
+                "AI kota beklemesi aktif (${sec}s). Groq/Cerebras veya Hızlı Yerel (ML Kit) moda geçebilirsiniz."
             )
         }
     }
@@ -411,6 +416,10 @@ class SmartAiTranslationProvider(
         return false
     }
 
+    /**
+     * Stateless single-turn OpenAI-compatible Chat Completions call (Groq / Cerebras / OpenRouter / Custom).
+     * Sends no prior conversation history and caps `max_tokens = 120` for sub-500ms latency.
+     */
     private fun callOpenAiCompatible(
         endpointUrl: String,
         model: String,
@@ -421,7 +430,8 @@ class SmartAiTranslationProvider(
         val payload = JSONObject().apply {
             put("model", model)
             put("temperature", 0.2)
-            put("max_tokens", 512)
+            put("max_tokens", MAX_OUTPUT_TOKENS)
+            put("stream", false)
             put(
                 "messages",
                 JSONArray()
@@ -430,20 +440,23 @@ class SmartAiTranslationProvider(
             )
         }
 
-        val request = Request.Builder()
+        val builder = Request.Builder()
             .url(endpointUrl)
             .addHeader("Authorization", "Bearer $apiKey")
             .addHeader("Content-Type", "application/json")
             .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
 
-        client.newCall(request).execute().use { response ->
+        if (endpointUrl.contains("openrouter.ai", ignoreCase = true)) {
+            builder.addHeader("X-Title", "SubLens")
+        }
+
+        client.newCall(builder.build()).execute().use { response ->
             val rawBody = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 val errMsg = extractApiError(response.code, rawBody)
                 if (response.code == 429) {
                     quotaCooldownUntilMs.set(System.currentTimeMillis() + QUOTA_COOLDOWN_MS)
-                    throw AiQuotaExceededException("$errMsg — Kota doldu, bekleyin veya Yerel moda geçin.")
+                    throw AiQuotaExceededException("$errMsg — Hız limiti doldu, kısa süre bekleyin veya Yerel moda geçin.")
                 }
                 throw IOException(errMsg)
             }
@@ -460,12 +473,12 @@ class SmartAiTranslationProvider(
     private fun parseNumberedBatchOutput(rawOutput: String, expectedCount: Int): List<String>? {
         val lines = rawOutput.lines().map { it.trim() }.filter { it.isNotEmpty() }
         val byIndex = mutableMapOf<Int, String>()
-        val pattern = Regex("""^\[(\d+)\]\s*(.+)$""")
+        val pattern = Regex("""^(?:\[(\d+)]|(\d+)[.)])\s*(.+)$""")
         for (line in lines) {
             val match = pattern.matchEntire(line)
             if (match != null) {
-                val index = match.groupValues[1].toIntOrNull()
-                val text = match.groupValues[2].trim()
+                val index = (match.groupValues[1].ifEmpty { match.groupValues[2] }).toIntOrNull()
+                val text = match.groupValues[3].trim()
                 if (index != null && index in 1..expectedCount && text.isNotEmpty()) {
                     byIndex[index - 1] = text
                 }
@@ -475,7 +488,7 @@ class SmartAiTranslationProvider(
             return (0 until expectedCount).map { byIndex.getValue(it) }
         }
         if (lines.size == expectedCount) {
-            return lines.map { it.replace(Regex("""^\[\d+\]\s*"""), "").trim() }
+            return lines.map { it.replace(Regex("""^(?:\[\d+]|\d+[.)])\s*"""), "").trim() }
         }
         return null
     }
@@ -502,7 +515,27 @@ class SmartAiTranslationProvider(
     }
 
     companion object {
+        const val MAX_OUTPUT_TOKENS = 120
         private const val QUOTA_COOLDOWN_MS = 45_000L
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        fun buildSystemPrompt(targetLangTr: String, isBatch: Boolean): String {
+            return if (isBatch) {
+                "Sen bir oyun altyazı çevirmenisin. Numaralı her satırı sadece doğal ve akıcı şekilde $targetLangTr diline çevir ([1] ..., [2] ...), başka hiçbir şey yazma."
+            } else {
+                "Sen bir oyun altyazı çevirmenisin. Sadece verilen metni doğal ve akıcı şekilde $targetLangTr diline çevir, başka hiçbir şey yazma."
+            }
+        }
+
+        fun resolveChatEndpoint(config: TranslationConfig): String {
+            val raw = config.aiEndpointUrl.trim().ifEmpty { config.aiPreset.defaultBaseUrl }.trimEnd('/')
+            if (raw.isEmpty() || raw == "firebase-ai-logic") return raw
+            return when {
+                raw.endsWith("/chat/completions", ignoreCase = true) -> raw
+                raw.endsWith("/v1", ignoreCase = true) || raw.endsWith("/openai/v1", ignoreCase = true) || raw.endsWith("/api/v1", ignoreCase = true) ->
+                    "$raw/chat/completions"
+                else -> raw
+            }
+        }
     }
 }

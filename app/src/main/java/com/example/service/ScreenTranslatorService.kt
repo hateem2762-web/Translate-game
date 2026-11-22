@@ -180,6 +180,7 @@ class ScreenTranslatorService : Service() {
                         currentTranslatedText = out.translatedText,
                         inPlaceBlocks = out.inPlaceBlocks,
                         isStabilizing = out.isStabilizing,
+                        isAiRefining = out.isAiRefining,
                         lastFromCache = out.fromCache,
                         lastLatencyMs = out.latencyMs,
                         framesProcessed = out.framesProcessed,
@@ -269,6 +270,7 @@ class ScreenTranslatorService : Service() {
                         classicBoxY = currentConfig.classicBoxY,
                         classicBoxOpacity = currentConfig.classicBoxOpacity,
                         isRoiLocked = false,
+                        isAiRefining = false,
                         errorMessage = null
                     )
                 }
@@ -325,7 +327,7 @@ class ScreenTranslatorService : Service() {
                 }
 
                 val loopDelay = if (isInPlaceWithActiveMask) {
-                    maxOf(currentConfig.scanIntervalMs, 1000L)
+                    maxOf(currentConfig.scanIntervalMs, 550L)
                 } else {
                     currentConfig.scanIntervalMs.coerceIn(150L, 1200L)
                 }

@@ -399,12 +399,16 @@ class SubtitleHudOverlayView(
         val dotColor = when {
             telemetry.status == ServiceStatus.PAUSED -> Color.parseColor("#64748B")
             telemetry.errorMessage != null -> Color.parseColor("#FB7185")
-            telemetry.isStabilizing -> Color.parseColor("#F59E0B")
+            telemetry.isStabilizing || telemetry.isAiRefining -> Color.parseColor("#F59E0B")
             else -> Color.parseColor("#22D3EE")
         }
         (statusDot.background as? GradientDrawable)?.setColor(dotColor)
         (cornerFabStatusDot.background as? GradientDrawable)?.setColor(
-            if (telemetry.status == ServiceStatus.RUNNING && telemetry.errorMessage == null && !telemetry.isStabilizing) {
+            if (telemetry.status == ServiceStatus.RUNNING &&
+                telemetry.errorMessage == null &&
+                !telemetry.isStabilizing &&
+                !telemetry.isAiRefining
+            ) {
                 Color.parseColor("#10B981")
             } else {
                 dotColor
@@ -413,6 +417,7 @@ class SubtitleHudOverlayView(
 
         val isBlur = telemetry.displayMode == DisplayMode.IN_PLACE_BLUR
         val engineAccentHex = when (telemetry.engineMode) {
+            TranslationEngineMode.HYBRID -> "#A78BFA"
             TranslationEngineMode.SMART_AI -> "#F59E0B"
             TranslationEngineMode.LIBRETRANSLATE -> "#34D399"
             TranslationEngineMode.OFFLINE_LOCAL -> "#22D3EE"
@@ -471,6 +476,7 @@ class SubtitleHudOverlayView(
                 telemetry.status == ServiceStatus.PAUSED -> "DURAKLAT"
                 telemetry.errorMessage != null -> "HATA"
                 telemetry.isStabilizing -> "BEKLE…"
+                telemetry.isAiRefining -> "AI DÜZELTİYOR…"
                 telemetry.lastFromCache && telemetry.currentTranslatedText.isNotEmpty() ->
                     "CACHE ${telemetry.lastLatencyMs}ms"
                 telemetry.currentTranslatedText.isNotEmpty() ->

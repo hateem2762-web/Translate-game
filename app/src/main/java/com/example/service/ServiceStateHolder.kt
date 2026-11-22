@@ -30,16 +30,20 @@ object ServiceStateHolder {
 
         _telemetry.update { current ->
             val last = current.recentEntries.lastOrNull()
-            val isDuplicate = last != null && (
-                normalizeKey(last.sourceText) == cleanSource ||
-                    normalizeKey(last.translatedText) == cleanTranslated
-                )
-            if (isDuplicate) {
-                current
-            } else {
-                val updated = (current.recentEntries + entry).takeLast(MAX_HISTORY_ENTRIES)
-                current.copy(recentEntries = updated)
+            if (last != null) {
+                val sameSource = normalizeKey(last.sourceText) == cleanSource
+                val sameTranslation = normalizeKey(last.translatedText) == cleanTranslated
+                if (sameSource && !sameTranslation) {
+                    // Hybrid refinement: replace the local draft entry smoothly with the refined AI translation
+                    val replaced = current.recentEntries.dropLast(1) + entry
+                    return@update current.copy(recentEntries = replaced)
+                }
+                if (sameSource || sameTranslation) {
+                    return@update current
+                }
             }
+            val updated = (current.recentEntries + entry).takeLast(MAX_HISTORY_ENTRIES)
+            current.copy(recentEntries = updated)
         }
     }
 

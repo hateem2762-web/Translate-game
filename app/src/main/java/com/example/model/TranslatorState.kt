@@ -53,6 +53,7 @@ data class TranslatorTelemetry(
     val currentTranslatedText: String = "",
     val inPlaceBlocks: List<InPlaceBlock> = emptyList(),
     val isStabilizing: Boolean = false,
+    val isAiRefining: Boolean = false,
     val isRoiLocked: Boolean = false,
     val lastFromCache: Boolean = false,
     val lastLatencyMs: Long = 0L,

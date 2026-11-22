@@ -502,4 +502,150 @@ class SubtitlePipelineTest {
         assertTrue(pipeline.output.value.fromCache)
         assertEquals("AI:The ancient dragon awakens in the dark cavern", pipeline.output.value.translatedText)
     }
+
+    @Test
+    fun `minor OCR flicker during debounce does not cancel or delay pending AI translation`() = runTest {
+        val ai = FakeProvider(TranslationEngineMode.SMART_AI, "AI")
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(TranslationEngineMode.SMART_AI to ai),
+            cacheStore = InMemoryCacheStore()
+        )
+        val aiConfig = TranslationConfig(
+            debounceMs = 300L,
+            engineMode = TranslationEngineMode.SMART_AI
+        )
+
+        pipeline.processRecognizedResult(
+            simpleResult("Open the sacred temple gate!"),
+            null,
+            aiConfig
+        )
+        advanceTimeBy(150L)
+
+        // Punctuation/1-char flicker halfway through debounce must NOT reset the 300ms timer
+        pipeline.processRecognizedResult(
+            simpleResult("Open the sacred temple gate."),
+            null,
+            aiConfig
+        )
+        advanceTimeBy(150L)
+        runCurrent()
+
+        assertEquals(1, ai.translateCalls)
+        assertEquals("AI:Open the sacred temple gate!", pipeline.output.value.translatedText)
+    }
+
+    @Test
+    fun `ocr preprocessor merges broken paragraph lines and strips stray UI symbols`() {
+        val cleaned = com.example.engine.OcrTextPreprocessor.clean(
+            "| Find the an-\ncient key\nbefore   darkness falls ■ ~ !",
+            isChinese = false
+        )
+        assertEquals("Find the ancient key before darkness falls!", cleaned)
+
+        val cleanedZh = com.example.engine.OcrTextPreprocessor.clean(
+            "古老的 封印\n正在 碎裂 | ！",
+            isChinese = true
+        )
+        assertEquals("古老的封印正在碎裂！", cleanedZh)
+    }
+
+    @Test
+    fun `hybrid mode emits local draft immediately then refines with AI and updates history in-place`() = runTest {
+        val offline = FakeProvider(TranslationEngineMode.OFFLINE_LOCAL, "LOC")
+        val delayedAi = object : TranslationProvider {
+            override val mode: TranslationEngineMode = TranslationEngineMode.SMART_AI
+            var calls = 0
+            override suspend fun isReady(config: TranslationConfig): Boolean = true
+            override suspend fun translate(text: String, config: TranslationConfig): String {
+                calls++
+                kotlinx.coroutines.delay(400L)
+                return "AI:$text"
+            }
+            override fun close() = Unit
+        }
+        val cache = InMemoryCacheStore()
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(
+                TranslationEngineMode.OFFLINE_LOCAL to offline,
+                TranslationEngineMode.SMART_AI to delayedAi
+            ),
+            cacheStore = cache
+        )
+        val hybridConfig = TranslationConfig(
+            debounceMs = 200L,
+            engineMode = TranslationEngineMode.HYBRID
+        )
+
+        com.example.service.ServiceStateHolder.clearHistory()
+
+        pipeline.processRecognizedResult(simpleResult("Open the gate"), null, hybridConfig)
+        advanceTimeBy(200L)
+        runCurrent()
+
+        // Step 1: Local preview appeared immediately while AI is still running
+        assertEquals(1, offline.translateCalls)
+        assertEquals("LOC:Open the gate", pipeline.output.value.translatedText)
+        assertTrue(pipeline.output.value.isAiRefining)
+        pipeline.output.value.lastCompletedEntry?.let {
+            com.example.service.ServiceStateHolder.pushCompletedEntry(it)
+        }
+        assertEquals(1, com.example.service.ServiceStateHolder.telemetry.value.recentEntries.size)
+
+        // Step 2: AI refinement finishes -> smoothly replaces text and in-place updates history
+        advanceTimeBy(450L)
+        runCurrent()
+        assertEquals(1, delayedAi.calls)
+        assertEquals("AI:Open the gate", pipeline.output.value.translatedText)
+        assertFalse(pipeline.output.value.isAiRefining)
+        pipeline.output.value.lastCompletedEntry?.let {
+            com.example.service.ServiceStateHolder.pushCompletedEntry(it)
+        }
+        val history = com.example.service.ServiceStateHolder.telemetry.value.recentEntries
+        assertEquals(1, history.size)
+        assertEquals("AI:Open the gate", history.first().translatedText)
+
+        // Step 3: Re-appearing later -> served from AI cache in 0ms without calling offline or AI again
+        repeat(3) { pipeline.processRecognizedResult(simpleResult(""), null, hybridConfig) }
+        pipeline.processRecognizedResult(simpleResult("Open the gate"), null, hybridConfig)
+        advanceTimeBy(200L)
+        runCurrent()
+        assertEquals(1, offline.translateCalls)
+        assertEquals(1, delayedAi.calls)
+        assertTrue(pipeline.output.value.fromCache)
+        assertEquals("AI:Open the gate", pipeline.output.value.translatedText)
+
+        com.example.service.ServiceStateHolder.clearHistory()
+    }
+
+    @Test
+    fun `smart AI provider resolves Groq Cerebras OpenRouter endpoints and builds stateless prompt`() {
+        val groqBaseConfig = TranslationConfig(
+            aiPreset = com.example.model.AiProviderPreset.GROQ,
+            aiEndpointUrl = "https://api.groq.com/openai/v1"
+        )
+        assertEquals(
+            "https://api.groq.com/openai/v1/chat/completions",
+            com.example.engine.SmartAiTranslationProvider.resolveChatEndpoint(groqBaseConfig)
+        )
+
+        val cerebrasFullConfig = TranslationConfig(
+            aiPreset = com.example.model.AiProviderPreset.CEREBRAS,
+            aiEndpointUrl = "https://api.cerebras.ai/v1/chat/completions"
+        )
+        assertEquals(
+            "https://api.cerebras.ai/v1/chat/completions",
+            com.example.engine.SmartAiTranslationProvider.resolveChatEndpoint(cerebrasFullConfig)
+        )
+
+        assertEquals(120, com.example.engine.SmartAiTranslationProvider.MAX_OUTPUT_TOKENS)
+        assertEquals(
+            "Sen bir oyun altyazı çevirmenisin. Sadece verilen metni doğal ve akıcı şekilde Türkçe diline çevir, başka hiçbir şey yazma.",
+            com.example.engine.SmartAiTranslationProvider.buildSystemPrompt("Türkçe", isBatch = false)
+        )
+    }
 }

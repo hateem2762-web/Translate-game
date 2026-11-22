@@ -40,6 +40,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BlurOn
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.OfflineBolt
@@ -276,9 +277,13 @@ fun SandboxTab(
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Text(
-                                        text = "KLASİK KUTU • ${uiState.sandboxState.latencyMs}ms",
+                                        text = if (uiState.sandboxState.isAiRefining) {
+                                            "KLASİK KUTU • AI İYİLEŞTİRİYOR…"
+                                        } else {
+                                            "KLASİK KUTU • ${uiState.sandboxState.latencyMs}ms"
+                                        },
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = CyanPrimary
+                                        color = if (uiState.sandboxState.isAiRefining) AmberTertiary else CyanPrimary
                                     )
                                     Box {
                                         Text(
@@ -402,7 +407,8 @@ fun SandboxTab(
                     }
 
                     // Model / Error feedback inside Sandbox
-                    if (uiState.config.engineMode == TranslationEngineMode.OFFLINE_LOCAL &&
+                    if ((uiState.config.engineMode == TranslationEngineMode.OFFLINE_LOCAL ||
+                            uiState.config.engineMode == TranslationEngineMode.HYBRID) &&
                         uiState.modelState != ModelDownloadState.READY
                     ) {
                         Surface(
@@ -490,14 +496,18 @@ fun SandboxTab(
                                         Icon(
                                             imageVector = Icons.Rounded.CheckCircle,
                                             contentDescription = null,
-                                            tint = EmeraldSuccess,
+                                            tint = if (uiState.sandboxState.isAiRefining) AmberTertiary else EmeraldSuccess,
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = "OCR Algıladı (${uiState.sandboxState.latencyMs} ms)",
+                                            text = if (uiState.sandboxState.isAiRefining) {
+                                                "Anlık Yerel (${uiState.sandboxState.latencyMs} ms) • AI İyileştiriyor…"
+                                            } else {
+                                                "OCR Algıladı (${uiState.sandboxState.latencyMs} ms)"
+                                            },
                                             style = MaterialTheme.typography.labelMedium,
-                                            color = EmeraldSuccess
+                                            color = if (uiState.sandboxState.isAiRefining) AmberTertiary else EmeraldSuccess
                                         )
                                     }
                                     TextButton(onClick = onClearSandbox) {
@@ -700,21 +710,11 @@ fun SandboxTab(
                                         index = index,
                                         count = TranslationEngineMode.entries.size
                                     ),
-                                    icon = {
-                                        Icon(
-                                            imageVector = when (mode) {
-                                                TranslationEngineMode.OFFLINE_LOCAL -> Icons.Rounded.OfflineBolt
-                                                TranslationEngineMode.SMART_AI -> Icons.Rounded.AutoAwesome
-                                                TranslationEngineMode.LIBRETRANSLATE -> Icons.Rounded.Translate
-                                            },
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    },
                                     modifier = Modifier.height(48.dp)
                                 ) {
                                     Text(
                                         text = mode.shortLabelTr,
+                                        style = MaterialTheme.typography.labelMedium,
                                         maxLines = 1,
                                         softWrap = false,
                                         overflow = TextOverflow.Ellipsis

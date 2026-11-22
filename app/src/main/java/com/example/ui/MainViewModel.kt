@@ -78,6 +78,7 @@ enum class SandboxPreset(
 data class SandboxState(
     val selectedPreset: SandboxPreset = SandboxPreset.ENGLISH_RPG,
     val isRunning: Boolean = false,
+    val isAiRefining: Boolean = false,
     val recognizedText: String = "",
     val translatedText: String = "",
     val inPlaceBlocks: List<InPlaceBlock> = emptyList(),
@@ -122,10 +123,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _aiApiKeyDraft = MutableStateFlow("")
     val aiApiKeyDraft: StateFlow<String> = _aiApiKeyDraft.asStateFlow()
 
-    private val _aiModelDraft = MutableStateFlow(AiProviderPreset.GEMINI_FLASH.defaultModel)
+    private val _aiModelDraft = MutableStateFlow(AiProviderPreset.GROQ.defaultModel)
     val aiModelDraft: StateFlow<String> = _aiModelDraft.asStateFlow()
 
-    private val _aiEndpointDraft = MutableStateFlow(AiProviderPreset.GEMINI_FLASH.defaultBaseUrl)
+    private val _aiEndpointDraft = MutableStateFlow(AiProviderPreset.GROQ.defaultBaseUrl)
     val aiEndpointDraft: StateFlow<String> = _aiEndpointDraft.asStateFlow()
 
     private val _libreEndpointDraft = MutableStateFlow(TranslationConfig.DEFAULT_LIBRE_ENDPOINT)
@@ -406,6 +407,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         sandboxStatusState.value = sandboxStatusState.value.copy(
             isRunning = true,
+            isAiRefining = false,
             errorMessage = null
         )
 
@@ -419,52 +421,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (!sceneBitmap.isRecycled) sceneBitmap.recycle()
                     sandboxStatusState.value = sandboxStatusState.value.copy(
                         isRunning = false,
+                        isAiRefining = false,
                         errorMessage = "Test sahnesinde metin algılanamadı."
                     )
                     return@launch
                 }
 
-                val provider = when (effectiveConfig.engineMode) {
-                    TranslationEngineMode.SMART_AI -> smartAiTester
-                    TranslationEngineMode.LIBRETRANSLATE -> libreTranslator
-                    TranslationEngineMode.OFFLINE_LOCAL -> offlineTranslator
-                }
-
                 val mergedBlocks = BoundingBoxStabilizer.mergeRowBlocks(ocrResult.blocks, isChinese)
+                val isMultiBlock = mergedBlocks.size > 1
+                val blockTexts = if (isMultiBlock) {
+                    mergedBlocks.map { SubtitlePipeline.normalizeText(it.text, isChinese) }
+                } else {
+                    emptyList()
+                }
+                val normSource = SubtitlePipeline.normalizeText(ocrResult.fullText, isChinese)
 
-                val inPlaceBlocks: List<InPlaceBlock>
-                val combinedTranslated: String
-
-                if (mergedBlocks.size > 1) {
-                    val blockTexts = mergedBlocks.map { SubtitlePipeline.normalizeText(it.text, isChinese) }
-                    val translatedLines = provider.translateBatch(blockTexts, effectiveConfig)
-                    inPlaceBlocks = mergedBlocks.mapIndexed { idx, block ->
-                        val translatedLine = translatedLines.getOrElse(idx) { "" }.trim()
+                // Build frosted blur patches once while sceneBitmap is live
+                val basePatches: List<InPlaceBlock> = if (isMultiBlock) {
+                    mergedBlocks.mapIndexed { idx, block ->
                         val patchResult: BlurredPatchResult = withContext(Dispatchers.Default) {
                             BlurMaskHelper.createFrostedPatch(sceneBitmap, block.boundingBox, effectiveConfig.overlayOpacity)
                         }
                         InPlaceBlock(
                             boundingBox = block.boundingBox,
                             sourceText = blockTexts[idx],
-                            translatedText = translatedLine,
+                            translatedText = "",
                             blurredPatch = patchResult.blurredBitmap,
                             sampledBgColor = patchResult.frostedTintColor
                         )
                     }
-                    combinedTranslated = inPlaceBlocks.joinToString("\n") { it.translatedText }.trim()
                 } else {
-                    val normSource = SubtitlePipeline.normalizeText(ocrResult.fullText, isChinese)
-                    combinedTranslated = provider.translate(normSource, effectiveConfig).trim()
                     val firstBox = mergedBlocks.firstOrNull()?.boundingBox
                         ?: RoiRect(24, (sceneBitmap.height * 0.55f).toInt(), sceneBitmap.width - 48, 80)
                     val patchResult = withContext(Dispatchers.Default) {
                         BlurMaskHelper.createFrostedPatch(sceneBitmap, firstBox, effectiveConfig.overlayOpacity)
                     }
-                    inPlaceBlocks = listOf(
+                    listOf(
                         InPlaceBlock(
                             boundingBox = firstBox,
                             sourceText = normSource,
-                            translatedText = combinedTranslated,
+                            translatedText = "",
                             blurredPatch = patchResult.blurredBitmap,
                             sampledBgColor = patchResult.frostedTintColor
                         )
@@ -473,9 +469,85 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 if (!sceneBitmap.isRecycled) sceneBitmap.recycle()
 
+                suspend fun runWithProvider(
+                    provider: com.example.engine.TranslationProvider,
+                    providerConfig: TranslationConfig
+                ): Pair<List<InPlaceBlock>, String> {
+                    return if (isMultiBlock) {
+                        val lines = provider.translateBatch(blockTexts, providerConfig)
+                        val blocks = basePatches.mapIndexed { idx, base ->
+                            base.copy(translatedText = lines.getOrElse(idx) { "" }.trim())
+                        }
+                        blocks to blocks.joinToString("\n") { it.translatedText }.trim()
+                    } else {
+                        val translated = provider.translate(normSource, providerConfig).trim()
+                        val blocks = listOf(basePatches.first().copy(translatedText = translated))
+                        blocks to translated
+                    }
+                }
+
+                if (effectiveConfig.engineMode == TranslationEngineMode.HYBRID) {
+                    var showedLocal = false
+                    val localReady = runCatching { offlineTranslator.isReady(effectiveConfig) }.getOrDefault(false)
+                    if (localReady) {
+                        val localRes = runCatching { runWithProvider(offlineTranslator, effectiveConfig) }.getOrNull()
+                        if (localRes != null && localRes.second.isNotBlank()) {
+                            showedLocal = true
+                            val localLatency = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
+                            sandboxStatusState.value = sandboxStatusState.value.copy(
+                                isRunning = false,
+                                isAiRefining = true,
+                                recognizedText = ocrResult.fullText,
+                                translatedText = localRes.second,
+                                inPlaceBlocks = localRes.first,
+                                latencyMs = localLatency,
+                                errorMessage = null
+                            )
+                        }
+                    }
+
+                    try {
+                        val aiConfig = effectiveConfig.copy(engineMode = TranslationEngineMode.SMART_AI)
+                        val aiRes = runWithProvider(smartAiTester, aiConfig)
+                        val totalLatency = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
+                        sandboxStatusState.value = sandboxStatusState.value.copy(
+                            isRunning = false,
+                            isAiRefining = false,
+                            recognizedText = ocrResult.fullText,
+                            translatedText = aiRes.second,
+                            inPlaceBlocks = aiRes.first,
+                            latencyMs = totalLatency,
+                            errorMessage = null
+                        )
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        sandboxStatusState.value = sandboxStatusState.value.copy(
+                            isRunning = false,
+                            isAiRefining = false,
+                            recognizedText = ocrResult.fullText,
+                            errorMessage = if (showedLocal) {
+                                "Yerel anlık gösterildi • AI hatası: ${e.localizedMessage ?: "Bağlantı hatası"}"
+                            } else {
+                                e.localizedMessage ?: "Hibrit AI çevirisi başarısız oldu."
+                            }
+                        )
+                    }
+                    return@launch
+                }
+
+                val provider = when (effectiveConfig.engineMode) {
+                    TranslationEngineMode.SMART_AI -> smartAiTester
+                    TranslationEngineMode.LIBRETRANSLATE -> libreTranslator
+                    TranslationEngineMode.OFFLINE_LOCAL -> offlineTranslator
+                    TranslationEngineMode.HYBRID -> smartAiTester
+                }
+
+                val (inPlaceBlocks, combinedTranslated) = runWithProvider(provider, effectiveConfig)
                 val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
                 sandboxStatusState.value = sandboxStatusState.value.copy(
                     isRunning = false,
+                    isAiRefining = false,
                     recognizedText = ocrResult.fullText,
                     translatedText = combinedTranslated,
                     inPlaceBlocks = inPlaceBlocks,
@@ -490,6 +562,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 android.util.Log.e("MainViewModel", "Sandbox translation failed", e)
                 sandboxStatusState.value = sandboxStatusState.value.copy(
                     isRunning = false,
+                    isAiRefining = false,
                     errorMessage = e.localizedMessage ?: "Canlı test çevirisi başarısız oldu."
                 )
             }

@@ -8,6 +8,7 @@ import com.example.model.SubtitleEntry
 import com.example.model.TranslationConfig
 import com.example.model.TranslationEngineMode
 import com.google.mlkit.nl.translate.TranslateLanguage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -21,6 +22,7 @@ data class PipelineOutput(
     val translatedText: String = "",
     val inPlaceBlocks: List<InPlaceBlock> = emptyList(),
     val isStabilizing: Boolean = false,
+    val isAiRefining: Boolean = false,
     val fromCache: Boolean = false,
     val latencyMs: Long = 0L,
     val framesProcessed: Long = 0L,
@@ -31,7 +33,7 @@ data class PipelineOutput(
 )
 
 /**
- * Core OCR -> Self-OCR Guard -> Typewriter Debounce -> Cache-First (Offline or Smart AI) Pipeline.
+ * Core OCR -> Text Preprocessing -> Self-OCR Guard -> Debounce -> Cache-First / Hybrid / AI Pipeline.
  */
 class SubtitlePipeline(
     private val scope: CoroutineScope,
@@ -48,7 +50,7 @@ class SubtitlePipeline(
     private var pendingSnapshot: Bitmap? = null
 
     private var lastTranslatedSource: String = ""
-    private var lastRenderedTranslations: Set<String> = emptySet()
+    private var lastRenderedTranslations: MutableSet<String> = mutableSetOf()
     private var lastRenderedCombined: String = ""
     private var consecutiveBlankFrames: Int = 0
     private var debounceJob: Job? = null
@@ -66,7 +68,7 @@ class SubtitlePipeline(
         pendingBlocks = emptyList()
         recyclePendingSnapshot()
         lastTranslatedSource = ""
-        lastRenderedTranslations = emptySet()
+        lastRenderedTranslations.clear()
         lastRenderedCombined = ""
         consecutiveBlankFrames = 0
         boxStabilizer.reset()
@@ -81,13 +83,14 @@ class SubtitlePipeline(
 
     fun clearActiveSubtitle() {
         lastTranslatedSource = ""
-        lastRenderedTranslations = emptySet()
+        lastRenderedTranslations.clear()
         lastRenderedCombined = ""
         boxStabilizer.reset()
         _output.value = _output.value.copy(
             translatedText = "",
             inPlaceBlocks = emptyList(),
-            isStabilizing = false
+            isStabilizing = false,
+            isAiRefining = false
         )
     }
 
@@ -112,7 +115,7 @@ class SubtitlePipeline(
     }
 
     /**
-     * Exposed internally for deterministic unit testing of debounce, self-OCR guard, and caching.
+     * Exposed internally for deterministic unit testing of debounce, hybrid flow, self-OCR guard, and caching.
      */
     internal fun processRecognizedResult(
         ocrResult: OcrResult,
@@ -133,18 +136,20 @@ class SubtitlePipeline(
                 pendingBlocks = emptyList()
                 recyclePendingSnapshot()
                 lastTranslatedSource = ""
-                lastRenderedTranslations = emptySet()
+                lastRenderedTranslations.clear()
                 lastRenderedCombined = ""
                 boxStabilizer.reset()
                 if (config.displayMode == DisplayMode.IN_PLACE_BLUR && current.inPlaceBlocks.isNotEmpty()) {
                     _output.value = current.copy(
                         inPlaceBlocks = emptyList(),
                         isStabilizing = false,
+                        isAiRefining = false,
                         framesProcessed = current.framesProcessed + 1
                     )
                 } else {
                     _output.value = current.copy(
                         isStabilizing = false,
+                        isAiRefining = false,
                         framesProcessed = current.framesProcessed + 1
                     )
                 }
@@ -188,6 +193,23 @@ class SubtitlePipeline(
             return
         }
 
+        val cleanPending = stripMinorPunctuation(pendingCandidate)
+        val isPendingMinorFlicker = debounceJob?.isActive == true &&
+            pendingCandidate.isNotEmpty() &&
+            (
+                (cleanCur.isNotEmpty() && cleanCur == cleanPending) ||
+                    (cleanPending.length >= 5 &&
+                        cleanCur.length >= 5 &&
+                        BoundingBoxStabilizer.textSimilarity(cleanCur, cleanPending) >= 0.85f)
+                )
+        if (isPendingMinorFlicker) {
+            _output.value = current.copy(
+                framesProcessed = current.framesProcessed + 1,
+                framesSkipped = current.framesSkipped + 1
+            )
+            return
+        }
+
         pendingCandidate = normalized
         pendingBlocks = boxStabilizer.stabilize(ocrResult.blocks, isChinese)
         recyclePendingSnapshot()
@@ -201,6 +223,7 @@ class SubtitlePipeline(
         _output.value = current.copy(
             sourceText = normalized,
             isStabilizing = true,
+            isAiRefining = false,
             framesProcessed = current.framesProcessed + 1,
             errorMessage = null
         )
@@ -208,14 +231,396 @@ class SubtitlePipeline(
         debounceJob = scope.launch {
             delay(config.debounceMs)
             if (pendingCandidate == normalized) {
-                executeTranslation(
-                    sourceText = normalized,
-                    blocks = pendingBlocks,
-                    snapshot = pendingSnapshot,
-                    config = config
-                )
+                if (config.engineMode == TranslationEngineMode.HYBRID) {
+                    executeHybridTranslation(
+                        sourceText = normalized,
+                        blocks = pendingBlocks,
+                        snapshot = pendingSnapshot,
+                        config = config
+                    )
+                } else {
+                    executeTranslation(
+                        sourceText = normalized,
+                        blocks = pendingBlocks,
+                        snapshot = pendingSnapshot,
+                        config = config
+                    )
+                }
             }
         }
+    }
+
+    /**
+     * Hybrid Zero-Wait Mode:
+     * 1. Check SMART_AI cache first -> 0ms instant output if previously refined by AI.
+     * 2. Otherwise show OFFLINE_LOCAL translation immediately (<50ms).
+     * 3. Refine in background with SMART_AI, cache under SMART_AI, and smoothly update UI + History.
+     */
+    private suspend fun executeHybridTranslation(
+        sourceText: String,
+        blocks: List<OcrBlock>,
+        snapshot: Bitmap?,
+        config: TranslationConfig
+    ) {
+        val isChinese = config.sourceLangCode == TranslateLanguage.CHINESE
+        val startTime = System.currentTimeMillis()
+        val offlineProvider = providers[TranslationEngineMode.OFFLINE_LOCAL]
+        val aiProvider = providers[TranslationEngineMode.SMART_AI]
+        val aiCacheConfig = config.copy(engineMode = TranslationEngineMode.SMART_AI)
+
+        val isMultiBlockInPlace = config.displayMode == DisplayMode.IN_PLACE_BLUR && blocks.size > 1
+        val normalizedBlocks = if (isMultiBlockInPlace) {
+            blocks.map { normalizeText(it.text, isChinese) }
+        } else {
+            emptyList()
+        }
+
+        try {
+            // 1. Check AI Cache First (0ms latency)
+            if (isMultiBlockInPlace) {
+                val aiCachedList = normalizedBlocks.map { blockNorm ->
+                    if (blockNorm.isBlank()) "" else cacheStore.get(
+                        engineMode = TranslationEngineMode.SMART_AI,
+                        sourceLang = config.sourceLangCode,
+                        targetLang = config.targetLangCode,
+                        normalizedSource = blockNorm
+                    )
+                }
+                if (aiCachedList.none { it == null }) {
+                    val patchBlocks = buildInPlaceBlocks(blocks, normalizedBlocks, aiCachedList.map { it.orEmpty() }, snapshot, config.overlayOpacity)
+                    recyclePendingSnapshot()
+                    emitHybridSuccess(
+                        sourceText = sourceText,
+                        translatedText = patchBlocks.joinToString("\n") { it.translatedText }.trim(),
+                        inPlaceBlocks = patchBlocks,
+                        fromCache = true,
+                        isAiRefining = false,
+                        latencyMs = (System.currentTimeMillis() - startTime).coerceAtLeast(1L),
+                        entryEngine = TranslationEngineMode.SMART_AI
+                    )
+                    return
+                }
+            } else {
+                val exactAiCached = cacheStore.get(
+                    engineMode = TranslationEngineMode.SMART_AI,
+                    sourceLang = config.sourceLangCode,
+                    targetLang = config.targetLangCode,
+                    normalizedSource = sourceText
+                )
+                val cachedAi = exactAiCached ?: findFuzzyCachedTranslation(sourceText, aiCacheConfig)
+                if (cachedAi != null) {
+                    val singleBlocks = buildSingleInPlaceBlocks(sourceText, cachedAi, blocks, snapshot, config.overlayOpacity, config.displayMode)
+                    recyclePendingSnapshot()
+                    emitHybridSuccess(
+                        sourceText = sourceText,
+                        translatedText = cachedAi,
+                        inPlaceBlocks = singleBlocks,
+                        fromCache = true,
+                        isAiRefining = false,
+                        latencyMs = (System.currentTimeMillis() - startTime).coerceAtLeast(1L),
+                        entryEngine = TranslationEngineMode.SMART_AI
+                    )
+                    return
+                }
+            }
+
+            // Prepare frosted blur patches once (if IN_PLACE_BLUR) before recycling snapshot
+            val baseInPlacePatches = if (config.displayMode == DisplayMode.IN_PLACE_BLUR && blocks.isNotEmpty()) {
+                if (isMultiBlockInPlace) {
+                    buildInPlaceBlocks(blocks, normalizedBlocks, List(blocks.size) { "" }, snapshot, config.overlayOpacity)
+                } else {
+                    buildSingleInPlaceBlocks(sourceText, "", blocks, snapshot, config.overlayOpacity, config.displayMode)
+                }
+            } else {
+                emptyList()
+            }
+            recyclePendingSnapshot()
+
+            // 2. Instant Local Preview (<50ms)
+            var showedLocal = false
+            var localCombined = ""
+            if (offlineProvider != null) {
+                val localReady = runCatching { offlineProvider.isReady(config) }.getOrDefault(false)
+                if (localReady) {
+                    val localResult = runCatching {
+                        if (isMultiBlockInPlace) {
+                            val localLines = translateBlocksWithCache(
+                                provider = offlineProvider,
+                                engineMode = TranslationEngineMode.OFFLINE_LOCAL,
+                                normalizedBlocks = normalizedBlocks,
+                                config = config
+                            )
+                            val updatedBlocks = baseInPlacePatches.mapIndexed { idx, block ->
+                                block.copy(translatedText = localLines.getOrElse(idx) { "" })
+                            }
+                            updatedBlocks to updatedBlocks.joinToString("\n") { it.translatedText }.trim()
+                        } else {
+                            val localCached = cacheStore.get(
+                                engineMode = TranslationEngineMode.OFFLINE_LOCAL,
+                                sourceLang = config.sourceLangCode,
+                                targetLang = config.targetLangCode,
+                                normalizedSource = sourceText
+                            )
+                            val translated = localCached ?: offlineProvider.translate(sourceText, config).trim().also { res ->
+                                if (res.isNotBlank()) {
+                                    cacheStore.put(
+                                        engineMode = TranslationEngineMode.OFFLINE_LOCAL,
+                                        sourceLang = config.sourceLangCode,
+                                        targetLang = config.targetLangCode,
+                                        normalizedSource = sourceText,
+                                        translated = res
+                                    )
+                                }
+                            }
+                            val updatedBlocks = if (baseInPlacePatches.isNotEmpty()) {
+                                listOf(baseInPlacePatches.first().copy(translatedText = translated))
+                            } else {
+                                emptyList()
+                            }
+                            updatedBlocks to translated
+                        }
+                    }.getOrNull()
+
+                    if (localResult != null && localResult.second.isNotBlank()) {
+                        showedLocal = true
+                        localCombined = localResult.second
+                        val localLatency = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
+                        emitHybridSuccess(
+                            sourceText = sourceText,
+                            translatedText = localCombined,
+                            inPlaceBlocks = localResult.first,
+                            fromCache = false,
+                            isAiRefining = aiProvider != null,
+                            latencyMs = localLatency,
+                            entryEngine = TranslationEngineMode.OFFLINE_LOCAL
+                        )
+                    }
+                }
+            }
+
+            // 3. Background AI Refinement
+            if (aiProvider == null) {
+                if (!showedLocal) {
+                    _output.value = _output.value.copy(
+                        isStabilizing = false,
+                        isAiRefining = false,
+                        errorMessage = "Hibrit mod için AI sağlayıcısı bulunamadı."
+                    )
+                }
+                return
+            }
+
+            try {
+                paceSmartAiIfNeeded(TranslationEngineMode.SMART_AI)
+                val aiBlocks: List<InPlaceBlock>
+                val aiCombined: String
+                if (isMultiBlockInPlace) {
+                    val aiLines = translateBlocksWithCache(
+                        provider = aiProvider,
+                        engineMode = TranslationEngineMode.SMART_AI,
+                        normalizedBlocks = normalizedBlocks,
+                        config = aiCacheConfig
+                    )
+                    aiBlocks = baseInPlacePatches.mapIndexed { idx, block ->
+                        block.copy(translatedText = aiLines.getOrElse(idx) { "" })
+                    }
+                    aiCombined = aiBlocks.joinToString("\n") { it.translatedText }.trim()
+                } else {
+                    aiCombined = aiProvider.translate(sourceText, aiCacheConfig).trim()
+                    if (aiCombined.isNotBlank()) {
+                        cacheStore.put(
+                            engineMode = TranslationEngineMode.SMART_AI,
+                            sourceLang = config.sourceLangCode,
+                            targetLang = config.targetLangCode,
+                            normalizedSource = sourceText,
+                            translated = aiCombined
+                        )
+                        recordFuzzyCache(sourceText, aiCombined, aiCacheConfig)
+                    }
+                    aiBlocks = if (baseInPlacePatches.isNotEmpty()) {
+                        listOf(baseInPlacePatches.first().copy(translatedText = aiCombined))
+                    } else {
+                        emptyList()
+                    }
+                }
+
+                if (aiCombined.isNotBlank()) {
+                    val totalLatency = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
+                    emitHybridSuccess(
+                        sourceText = sourceText,
+                        translatedText = aiCombined,
+                        inPlaceBlocks = aiBlocks,
+                        fromCache = false,
+                        isAiRefining = false,
+                        latencyMs = totalLatency,
+                        entryEngine = TranslationEngineMode.SMART_AI
+                    )
+                } else if (showedLocal) {
+                    _output.value = _output.value.copy(isAiRefining = false)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // If local translation is already visible on screen, keep it visible and clear spinner cleanly
+                _output.value = _output.value.copy(
+                    isStabilizing = false,
+                    isAiRefining = false,
+                    errorMessage = if (showedLocal) null else (e.localizedMessage ?: "AI çevirisi başarısız.")
+                )
+            }
+        } catch (e: CancellationException) {
+            recyclePendingSnapshot()
+            throw e
+        } catch (e: Exception) {
+            recyclePendingSnapshot()
+            _output.value = _output.value.copy(
+                isStabilizing = false,
+                isAiRefining = false,
+                errorMessage = e.localizedMessage ?: "Çeviri başarısız."
+            )
+        }
+    }
+
+    private fun emitHybridSuccess(
+        sourceText: String,
+        translatedText: String,
+        inPlaceBlocks: List<InPlaceBlock>,
+        fromCache: Boolean,
+        isAiRefining: Boolean,
+        latencyMs: Long,
+        entryEngine: TranslationEngineMode
+    ) {
+        lastTranslatedSource = sourceText
+        val normCombined = normalizeText(translatedText).lowercase()
+        if (normCombined.isNotBlank()) {
+            lastRenderedCombined = normCombined
+            lastRenderedTranslations.add(normCombined)
+        }
+        inPlaceBlocks.forEach { block ->
+            val normBlock = normalizeText(block.translatedText).lowercase()
+            if (normBlock.isNotBlank()) lastRenderedTranslations.add(normBlock)
+        }
+        pendingCandidate = ""
+
+        val entry = SubtitleEntry(
+            sourceText = sourceText,
+            translatedText = translatedText,
+            fromCache = fromCache,
+            latencyMs = latencyMs,
+            engineMode = entryEngine
+        )
+        val prev = _output.value
+        _output.value = prev.copy(
+            sourceText = sourceText,
+            translatedText = translatedText,
+            inPlaceBlocks = inPlaceBlocks,
+            isStabilizing = false,
+            isAiRefining = isAiRefining,
+            fromCache = fromCache,
+            latencyMs = latencyMs,
+            cacheHits = if (fromCache) prev.cacheHits + 1 else prev.cacheHits,
+            errorMessage = null,
+            lastCompletedEntry = entry
+        )
+    }
+
+    private suspend fun translateBlocksWithCache(
+        provider: TranslationProvider,
+        engineMode: TranslationEngineMode,
+        normalizedBlocks: List<String>,
+        config: TranslationConfig
+    ): List<String> {
+        val result = MutableList(normalizedBlocks.size) { "" }
+        val uncachedIndices = mutableListOf<Int>()
+        normalizedBlocks.forEachIndexed { idx, blockNorm ->
+            val cached = if (blockNorm.isBlank()) {
+                ""
+            } else {
+                cacheStore.get(
+                    engineMode = engineMode,
+                    sourceLang = config.sourceLangCode,
+                    targetLang = config.targetLangCode,
+                    normalizedSource = blockNorm
+                )
+            }
+            if (cached != null) {
+                result[idx] = cached
+            } else {
+                uncachedIndices.add(idx)
+            }
+        }
+        if (uncachedIndices.isNotEmpty()) {
+            val toTranslate = uncachedIndices.map { normalizedBlocks[it] }
+            val translatedBatch = if (toTranslate.size == 1) {
+                listOf(provider.translate(toTranslate.first(), config).trim())
+            } else {
+                provider.translateBatch(toTranslate, config).map { it.trim() }
+            }
+            uncachedIndices.forEachIndexed { batchIdx, origIdx ->
+                val blockNorm = normalizedBlocks[origIdx]
+                val res = translatedBatch.getOrElse(batchIdx) { "" }.trim()
+                result[origIdx] = res
+                if (res.isNotBlank()) {
+                    cacheStore.put(
+                        engineMode = engineMode,
+                        sourceLang = config.sourceLangCode,
+                        targetLang = config.targetLangCode,
+                        normalizedSource = blockNorm,
+                        translated = res
+                    )
+                }
+            }
+        }
+        return result
+    }
+
+    private fun buildInPlaceBlocks(
+        blocks: List<OcrBlock>,
+        normalizedBlocks: List<String>,
+        translations: List<String>,
+        snapshot: Bitmap?,
+        opacity: Float
+    ): List<InPlaceBlock> {
+        return blocks.mapIndexed { idx, block ->
+            val patchResult = if (snapshot != null && !snapshot.isRecycled) {
+                BlurMaskHelper.createFrostedPatch(snapshot, block.boundingBox, opacity)
+            } else {
+                BlurredPatchResult(null, 0xDD090E17.toInt())
+            }
+            InPlaceBlock(
+                boundingBox = block.boundingBox,
+                sourceText = normalizedBlocks.getOrElse(idx) { block.text },
+                translatedText = translations.getOrElse(idx) { "" },
+                blurredPatch = patchResult.blurredBitmap,
+                sampledBgColor = patchResult.frostedTintColor
+            )
+        }
+    }
+
+    private fun buildSingleInPlaceBlocks(
+        sourceText: String,
+        translatedText: String,
+        blocks: List<OcrBlock>,
+        snapshot: Bitmap?,
+        opacity: Float,
+        displayMode: DisplayMode
+    ): List<InPlaceBlock> {
+        if (displayMode != DisplayMode.IN_PLACE_BLUR || blocks.isEmpty()) return emptyList()
+        val mergedBox = mergeBoundingBoxes(blocks.map { it.boundingBox })
+        val patchResult = if (snapshot != null && !snapshot.isRecycled) {
+            BlurMaskHelper.createFrostedPatch(snapshot, mergedBox, opacity)
+        } else {
+            BlurredPatchResult(null, 0xDD090E17.toInt())
+        }
+        return listOf(
+            InPlaceBlock(
+                boundingBox = mergedBox,
+                sourceText = sourceText,
+                translatedText = translatedText,
+                blurredPatch = patchResult.blurredBitmap,
+                sampledBgColor = patchResult.frostedTintColor
+            )
+        )
     }
 
     private suspend fun executeTranslation(
@@ -331,25 +736,14 @@ class SubtitlePipeline(
                     }
                 }
 
-                inPlaceResultBlocks = if (config.displayMode == DisplayMode.IN_PLACE_BLUR && blocks.isNotEmpty()) {
-                    val mergedBox = mergeBoundingBoxes(blocks.map { it.boundingBox })
-                    val patchResult = if (snapshot != null && !snapshot.isRecycled) {
-                        BlurMaskHelper.createFrostedPatch(snapshot, mergedBox, config.overlayOpacity)
-                    } else {
-                        BlurredPatchResult(null, 0xDD090E17.toInt())
-                    }
-                    listOf(
-                        InPlaceBlock(
-                            boundingBox = mergedBox,
-                            sourceText = sourceText,
-                            translatedText = combinedTranslated,
-                            blurredPatch = patchResult.blurredBitmap,
-                            sampledBgColor = patchResult.frostedTintColor
-                        )
-                    )
-                } else {
-                    emptyList()
-                }
+                inPlaceResultBlocks = buildSingleInPlaceBlocks(
+                    sourceText = sourceText,
+                    translatedText = combinedTranslated,
+                    blocks = blocks,
+                    snapshot = snapshot,
+                    opacity = config.overlayOpacity,
+                    displayMode = config.displayMode
+                )
             }
 
             recyclePendingSnapshot()
@@ -359,7 +753,7 @@ class SubtitlePipeline(
             lastRenderedTranslations = inPlaceResultBlocks
                 .map { normalizeText(it.translatedText).lowercase() }
                 .filter { it.isNotBlank() }
-                .toSet()
+                .toMutableSet()
             pendingCandidate = ""
 
             val pureCacheHit = anyCacheHit && !anyNetworkOrModelCall
@@ -377,26 +771,28 @@ class SubtitlePipeline(
                 translatedText = combinedTranslated,
                 inPlaceBlocks = inPlaceResultBlocks,
                 isStabilizing = false,
+                isAiRefining = false,
                 fromCache = pureCacheHit,
                 latencyMs = latency,
                 cacheHits = if (pureCacheHit) prev.cacheHits + 1 else prev.cacheHits,
                 errorMessage = null,
                 lastCompletedEntry = entry
             )
-        } catch (e: kotlinx.coroutines.CancellationException) {
+        } catch (e: CancellationException) {
             recyclePendingSnapshot()
             throw e
         } catch (e: Exception) {
             recyclePendingSnapshot()
             _output.value = _output.value.copy(
                 isStabilizing = false,
+                isAiRefining = false,
                 errorMessage = e.localizedMessage ?: "Çeviri başarısız."
             )
         }
     }
 
     private suspend fun paceSmartAiIfNeeded(engineMode: TranslationEngineMode) {
-        if (engineMode != TranslationEngineMode.SMART_AI) return
+        if (engineMode != TranslationEngineMode.SMART_AI && engineMode != TranslationEngineMode.HYBRID) return
         val now = System.currentTimeMillis()
         if (lastCloudCallElapsedMs > 0L) {
             val remaining = AI_MIN_REQUEST_INTERVAL_MS - (now - lastCloudCallElapsedMs)
@@ -495,14 +891,11 @@ class SubtitlePipeline(
     }
 
     companion object {
-        private const val AI_MIN_REQUEST_INTERVAL_MS = 2_400L
-        private val MULTI_WHITESPACE = Regex("\\s+")
+        private const val AI_MIN_REQUEST_INTERVAL_MS = 400L
         private val MINOR_PUNCT_REGEX = Regex("[.,!?;:'\"`~•·]+")
-        private val CJK_INNER_SPACE = Regex("(?<=[\\u4E00-\\u9FFF\\u3000-\\u303F\\uFF00-\\uFFEF])\\s+(?=[\\u4E00-\\u9FFF\\u3000-\\u303F\\uFF00-\\uFFEF])")
 
         fun normalizeText(input: String, isChinese: Boolean = false): String {
-            val collapsed = input.replace(MULTI_WHITESPACE, " ").trim()
-            return if (isChinese) collapsed.replace(CJK_INNER_SPACE, "") else collapsed
+            return OcrTextPreprocessor.clean(input, isChinese)
         }
     }
 }

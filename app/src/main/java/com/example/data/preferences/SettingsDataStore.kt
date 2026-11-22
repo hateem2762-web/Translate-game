@@ -89,7 +89,7 @@ class SettingsDataStore(private val context: Context) {
         TranslationConfig(
             sourceLangCode = prefs[Keys.SOURCE_LANG] ?: TranslateLanguage.ENGLISH,
             targetLangCode = prefs[Keys.TARGET_LANG] ?: TranslateLanguage.TURKISH,
-            debounceMs = prefs[Keys.DEBOUNCE_MS] ?: 450L,
+            debounceMs = prefs[Keys.DEBOUNCE_MS] ?: 350L,
             scanIntervalMs = prefs[Keys.SCAN_INTERVAL_MS] ?: 300L,
             overlayOpacity = prefs[Keys.OVERLAY_OPACITY] ?: 0.86f,
             showOriginalText = prefs[Keys.SHOW_ORIGINAL] ?: false,
