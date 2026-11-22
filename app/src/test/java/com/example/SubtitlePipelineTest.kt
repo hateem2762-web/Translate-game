@@ -455,12 +455,15 @@ class SubtitlePipelineTest {
     }
 
     @Test
-    fun `engine modes exclude libretranslate and include only offline hybrid and smart AI`() {
+    fun `engine modes include offline hybrid smart AI and free web translation providers`() {
         val modes = TranslationEngineMode.entries
-        assertEquals(3, modes.size)
+        assertEquals(6, modes.size)
         assertTrue(modes.contains(TranslationEngineMode.OFFLINE_LOCAL))
         assertTrue(modes.contains(TranslationEngineMode.HYBRID))
         assertTrue(modes.contains(TranslationEngineMode.SMART_AI))
+        assertTrue(modes.contains(TranslationEngineMode.GOOGLE_FREE))
+        assertTrue(modes.contains(TranslationEngineMode.BING_FREE))
+        assertTrue(modes.contains(TranslationEngineMode.BAIDU_FREE))
     }
 
     @Test

@@ -22,6 +22,7 @@ import com.example.capture.ScreenMetricsHelper
 import com.example.data.local.SubLensDatabase
 import com.example.data.preferences.SettingsDataStore
 import com.example.data.repository.TranslationCacheRepository
+import com.example.engine.FreeWebTranslationProvider
 import com.example.engine.MlKitOcrEngine
 import com.example.engine.MlKitTranslatorEngine
 import com.example.engine.OfflineMlKitTranslationProvider
@@ -75,12 +76,18 @@ class ScreenTranslatorService : Service() {
         offlineProvider = OfflineMlKitTranslationProvider(MlKitTranslatorEngine())
         smartAiProvider = SmartAiTranslationProvider(applicationContext)
 
+        val freeWebProvider = FreeWebTranslationProvider(offlineProvider, smartAiProvider)
+
         pipeline = SubtitlePipeline(
             scope = serviceScope,
             ocrEngine = ocrEngine,
             providers = mapOf(
                 TranslationEngineMode.OFFLINE_LOCAL to offlineProvider,
-                TranslationEngineMode.SMART_AI to smartAiProvider
+                TranslationEngineMode.HYBRID to smartAiProvider,
+                TranslationEngineMode.SMART_AI to smartAiProvider,
+                TranslationEngineMode.GOOGLE_FREE to freeWebProvider,
+                TranslationEngineMode.BING_FREE to freeWebProvider,
+                TranslationEngineMode.BAIDU_FREE to freeWebProvider
             ),
             cacheStore = cacheRepository
         )

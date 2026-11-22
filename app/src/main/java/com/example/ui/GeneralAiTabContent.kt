@@ -158,6 +158,7 @@ internal fun GeneralAiTabContent(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EngineAndModelPackCard(
     uiState: MainUiState,
@@ -189,48 +190,47 @@ private fun EngineAndModelPackCard(
                 )
             }
 
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier.fillMaxWidth()
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                TranslationEngineMode.entries.forEachIndexed { index, mode ->
+                TranslationEngineMode.entries.forEach { mode ->
                     val selected = uiState.config.engineMode == mode
-                    SegmentedButton(
+                    val label = when (mode) {
+                        TranslationEngineMode.OFFLINE_LOCAL -> "Yerel (ML Kit)"
+                        TranslationEngineMode.HYBRID -> "Hibrit"
+                        TranslationEngineMode.SMART_AI -> "AI (Groq/Gemini)"
+                        TranslationEngineMode.GOOGLE_FREE -> "Google (Ücretsiz)"
+                        TranslationEngineMode.BING_FREE -> "Bing (Ücretsiz)"
+                        TranslationEngineMode.BAIDU_FREE -> "Baidu (Çince)"
+                    }
+                    FilterChip(
                         selected = selected,
                         onClick = { onSelectEngineMode(mode) },
-                        shape = SegmentedButtonDefaults.itemShape(
-                            index = index,
-                            count = TranslationEngineMode.entries.size
-                        ),
+                        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
                         modifier = Modifier
-                            .height(48.dp)
+                            .heightIn(min = 48.dp)
                             .testTag("engine_mode_${mode.name.lowercase()}"),
-                        colors = SegmentedButtonDefaults.colors(
-                            activeContainerColor = when (mode) {
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = when (mode) {
                                 TranslationEngineMode.HYBRID -> Color(0xFFA78BFA).copy(alpha = 0.22f)
                                 TranslationEngineMode.SMART_AI -> AmberTertiary.copy(alpha = 0.22f)
+                                TranslationEngineMode.GOOGLE_FREE,
+                                TranslationEngineMode.BING_FREE,
+                                TranslationEngineMode.BAIDU_FREE -> CyanPrimary.copy(alpha = 0.22f)
                                 TranslationEngineMode.OFFLINE_LOCAL -> CyanContainer
                             },
-                            activeContentColor = when (mode) {
+                            selectedLabelColor = when (mode) {
                                 TranslationEngineMode.HYBRID -> Color(0xFFA78BFA)
                                 TranslationEngineMode.SMART_AI -> AmberTertiary
+                                TranslationEngineMode.GOOGLE_FREE,
+                                TranslationEngineMode.BING_FREE,
+                                TranslationEngineMode.BAIDU_FREE -> CyanPrimary
                                 TranslationEngineMode.OFFLINE_LOCAL -> CyanPrimary
-                            },
-                            inactiveContainerColor = ObsidianSurfaceElevated,
-                            inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         )
-                    ) {
-                        Text(
-                            text = when (mode) {
-                                TranslationEngineMode.OFFLINE_LOCAL -> stringResource(R.string.engine_mode_offline)
-                                TranslationEngineMode.HYBRID -> stringResource(R.string.engine_mode_hybrid)
-                                TranslationEngineMode.SMART_AI -> stringResource(R.string.engine_mode_ai)
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    )
                 }
             }
 
@@ -242,10 +242,37 @@ private fun EngineAndModelPackCard(
                         "Durumsuz ultra hızlı LLM çevirisi (Groq / Cerebras / Gemini Düşünme=0, max 120 token, %92 önbellek)."
                     TranslationEngineMode.OFFLINE_LOCAL ->
                         "Sıfır internet gecikmesi ve kotasız sınırsız kullanım için cihaz içi ML Kit."
+                    TranslationEngineMode.GOOGLE_FREE ->
+                        "Google Çeviri (Ücretsiz): API anahtarı gerektirmez; İngilizce ve Çince dahil tüm dillerden hızlı HTTP çevirisi."
+                    TranslationEngineMode.BING_FREE ->
+                        "Microsoft / Bing Çeviri (Ücretsiz): Hızlı web tabanlı çeviri ucu; otomatik hata durumunda diğer motorlara düşer."
+                    TranslationEngineMode.BAIDU_FREE ->
+                        "Baidu Çeviri (Ücretsiz): Özellikle Çince oyun metinleri ve altyazılar için optimize edilmiş ücretsiz web motoru."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            val isFreeWebSelected = uiState.config.engineMode == TranslationEngineMode.GOOGLE_FREE ||
+                uiState.config.engineMode == TranslationEngineMode.BING_FREE ||
+                uiState.config.engineMode == TranslationEngineMode.BAIDU_FREE
+
+            if (isFreeWebSelected) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = AmberTertiary.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, AmberTertiary.copy(alpha = 0.35f))
+                ) {
+                    Text(
+                        text = "Ücretsiz web çeviriciler API anahtarı istemez ancak çok hızlı art arda isteklerde geçici bekleme verebilir; önbellek ve bekleme süresi (debounce) açık tutulmalıdır.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AmberTertiary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp)
+                    )
+                }
+            }
 
             HorizontalDivider(color = ObsidianOutline)
 

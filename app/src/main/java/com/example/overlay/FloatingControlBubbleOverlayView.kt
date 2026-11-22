@@ -435,6 +435,9 @@ class FloatingControlBubbleOverlayView(
             TranslationEngineMode.HYBRID -> Color.parseColor("#A78BFA")
             TranslationEngineMode.SMART_AI -> Color.parseColor("#F59E0B")
             TranslationEngineMode.OFFLINE_LOCAL -> spec.accentColor
+            TranslationEngineMode.GOOGLE_FREE,
+            TranslationEngineMode.BING_FREE,
+            TranslationEngineMode.BAIDU_FREE -> Color.parseColor("#22D3EE")
         }
         engineChip.text = "Motor: ${telemetry.engineMode.shortLabelTr}"
         styleChip(engineChip, engineAccent, highlighted = telemetry.engineMode != TranslationEngineMode.OFFLINE_LOCAL)

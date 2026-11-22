@@ -265,4 +265,22 @@ class ModelCatalogAndDataStoreTest {
         val reverted = store.configFlow.first()
         assertEquals(com.example.model.FloatingBubbleBehavior.HIDE_WHEN_ACTIVE, reverted.bubbleBehavior)
     }
+
+    @Test
+    fun `FreeWebTranslationProvider and engine modes are fully configured`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = SettingsDataStore(context)
+
+        store.updateEngineMode(com.example.model.TranslationEngineMode.GOOGLE_FREE)
+        var config = store.configFlow.first()
+        assertEquals(com.example.model.TranslationEngineMode.GOOGLE_FREE, config.engineMode)
+
+        store.updateEngineMode(com.example.model.TranslationEngineMode.BING_FREE)
+        config = store.configFlow.first()
+        assertEquals(com.example.model.TranslationEngineMode.BING_FREE, config.engineMode)
+
+        store.updateEngineMode(com.example.model.TranslationEngineMode.BAIDU_FREE)
+        config = store.configFlow.first()
+        assertEquals(com.example.model.TranslationEngineMode.BAIDU_FREE, config.engineMode)
+    }
 }

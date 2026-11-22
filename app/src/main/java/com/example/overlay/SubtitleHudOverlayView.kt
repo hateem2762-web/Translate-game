@@ -398,6 +398,9 @@ class SubtitleHudOverlayView(
             TranslationEngineMode.HYBRID -> "#A78BFA"
             TranslationEngineMode.SMART_AI -> "#F59E0B"
             TranslationEngineMode.OFFLINE_LOCAL -> "#22D3EE"
+            TranslationEngineMode.GOOGLE_FREE,
+            TranslationEngineMode.BING_FREE,
+            TranslationEngineMode.BAIDU_FREE -> "#22D3EE"
         }
         val engineHighlighted = telemetry.engineMode != TranslationEngineMode.OFFLINE_LOCAL
 

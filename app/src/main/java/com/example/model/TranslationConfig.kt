@@ -72,7 +72,10 @@ enum class SubtitleColorPreset(val labelTr: String, val argb: Int, val hex: Stri
 enum class TranslationEngineMode(val shortLabelTr: String) {
     OFFLINE_LOCAL("Yerel"),
     HYBRID("Hibrit"),
-    SMART_AI("AI")
+    SMART_AI("AI"),
+    GOOGLE_FREE("Google"),
+    BING_FREE("Bing"),
+    BAIDU_FREE("Baidu")
 }
 
 data class AiModelOption(

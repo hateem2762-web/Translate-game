@@ -16,6 +16,7 @@ import com.example.data.repository.TranslationCacheRepository
 import com.example.engine.BlurMaskHelper
 import com.example.engine.BlurredPatchResult
 import com.example.engine.BoundingBoxStabilizer
+import com.example.engine.FreeWebTranslationProvider
 import com.example.engine.MlKitOcrEngine
 import com.example.engine.MlKitTranslatorEngine
 import com.example.engine.OfflineMlKitTranslationProvider
@@ -120,6 +121,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val translatorEngine = MlKitTranslatorEngine()
     private val offlineTranslator = OfflineMlKitTranslationProvider(translatorEngine)
     private val smartAiTester = SmartAiTranslationProvider(appContext)
+    private val freeWebTester = FreeWebTranslationProvider(offlineTranslator, smartAiTester)
     private val sandboxOcrEngine = MlKitOcrEngine()
 
     private val screenBounds = ScreenMetricsHelper.getScreenBounds(appContext)
@@ -626,6 +628,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     TranslationEngineMode.SMART_AI -> smartAiTester
                     TranslationEngineMode.OFFLINE_LOCAL -> offlineTranslator
                     TranslationEngineMode.HYBRID -> smartAiTester
+                    TranslationEngineMode.GOOGLE_FREE,
+                    TranslationEngineMode.BING_FREE,
+                    TranslationEngineMode.BAIDU_FREE -> freeWebTester
                 }
 
                 val (inPlaceBlocks, combinedTranslated) = runWithProvider(provider, effectiveConfig)
@@ -698,6 +703,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sandboxOcrEngine.close()
         translatorEngine.close()
         smartAiTester.close()
+        freeWebTester.close()
         super.onCleared()
     }
 }
