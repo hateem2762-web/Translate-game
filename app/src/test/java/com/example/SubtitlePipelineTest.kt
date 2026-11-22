@@ -807,4 +807,69 @@ class SubtitlePipelineTest {
         assertTrue(com.example.model.ClassicTextFitMode.entries.contains(com.example.model.ClassicTextFitMode.WRAP_AND_EXPAND))
         assertTrue(com.example.model.ClassicTextFitMode.entries.contains(com.example.model.ClassicTextFitMode.AUTO_FIT_SHRINK))
     }
+
+    @Test
+    fun `google translate url uses gtx endpoint with auto source and utf8 encoding`() {
+        val url = com.example.engine.FreeWebTranslationProvider.buildGoogleTranslateUrl(
+            text = "Hello, shadow & light! Çağırdı",
+            targetLangCode = TranslateLanguage.TURKISH
+        )
+        assertTrue(url.startsWith("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=tr&dt=t&q="))
+        assertTrue(url.contains("%C3%87a%C4%9F%C4%B1rd%C4%B1"))
+    }
+
+    @Test
+    fun `google web mode never falls back to offline ML kit on HTTP or network error`() = runTest {
+        val offline = FakeProvider(TranslationEngineMode.OFFLINE_LOCAL, "BROKEN_LOCAL")
+        val failingGoogle = object : TranslationProvider {
+            override val mode: TranslationEngineMode = TranslationEngineMode.GOOGLE_FREE
+            var calls = 0
+            override suspend fun isReady(config: TranslationConfig): Boolean = true
+            override suspend fun translate(text: String, config: TranslationConfig): String {
+                calls++
+                throw java.io.IOException("Google Hatası: 403")
+            }
+            override fun close() = Unit
+        }
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(
+                TranslationEngineMode.OFFLINE_LOCAL to offline,
+                TranslationEngineMode.GOOGLE_FREE to failingGoogle
+            ),
+            cacheStore = InMemoryCacheStore()
+        )
+        val googleConfig = TranslationConfig(
+            debounceMs = 200L,
+            engineMode = TranslationEngineMode.GOOGLE_FREE
+        )
+
+        pipeline.processRecognizedResult(simpleResult("The merchant rested until morning."), null, googleConfig)
+        advanceTimeBy(200L)
+        runCurrent()
+
+        assertEquals(1, failingGoogle.calls)
+        assertEquals(0, offline.translateCalls)
+        assertEquals("", pipeline.output.value.translatedText)
+        assertEquals("Google Hatası: 403", pipeline.output.value.errorMessage)
+        assertEquals(TranslationEngineMode.GOOGLE_FREE, pipeline.output.value.resultEngineMode)
+    }
+
+    @Test
+    fun `engine mode source tags and AI chip visibility helpers identify each engine accurately`() {
+        assertEquals("[Google Web]", TranslationEngineMode.GOOGLE_FREE.formatSourceTag())
+        assertEquals("[Bing Web]", TranslationEngineMode.BING_FREE.formatSourceTag())
+        assertEquals("[Baidu Web]", TranslationEngineMode.BAIDU_FREE.formatSourceTag())
+        assertEquals("[Yerel ML Kiti]", TranslationEngineMode.OFFLINE_LOCAL.formatSourceTag())
+        assertEquals("[AI • Groq]", TranslationEngineMode.SMART_AI.formatSourceTag(com.example.model.AiProviderPreset.GROQ))
+        assertEquals("[Hibrit]", TranslationEngineMode.HYBRID.formatSourceTag())
+
+        assertFalse(TranslationEngineMode.GOOGLE_FREE.usesAiModel())
+        assertFalse(TranslationEngineMode.BING_FREE.usesAiModel())
+        assertFalse(TranslationEngineMode.BAIDU_FREE.usesAiModel())
+        assertFalse(TranslationEngineMode.OFFLINE_LOCAL.usesAiModel())
+        assertTrue(TranslationEngineMode.SMART_AI.usesAiModel())
+        assertTrue(TranslationEngineMode.HYBRID.usesAiModel())
+    }
 }

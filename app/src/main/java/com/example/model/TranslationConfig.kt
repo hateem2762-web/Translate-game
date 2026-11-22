@@ -69,13 +69,29 @@ enum class SubtitleColorPreset(val labelTr: String, val argb: Int, val hex: Stri
     }
 }
 
-enum class TranslationEngineMode(val shortLabelTr: String) {
-    OFFLINE_LOCAL("Yerel"),
-    HYBRID("Hibrit"),
-    SMART_AI("AI"),
-    GOOGLE_FREE("Google"),
-    BING_FREE("Bing"),
-    BAIDU_FREE("Baidu")
+enum class TranslationEngineMode(
+    val shortLabelTr: String,
+    val badgeLabelTr: String,
+    val fullTitleTr: String,
+    val accentHex: String
+) {
+    GOOGLE_FREE("Google", "Google Web", "Google Çeviri", "#34D399"),
+    BING_FREE("Bing", "Bing Web", "Bing Çeviri", "#38BDF8"),
+    BAIDU_FREE("Baidu", "Baidu Web", "Baidu Çeviri", "#818CF8"),
+    OFFLINE_LOCAL("Yerel", "Yerel ML Kiti", "Çevrimdışı ML Kit", "#22D3EE"),
+    SMART_AI("AI", "Akıllı AI", "Yapay Zeka (AI)", "#F59E0B"),
+    HYBRID("Hibrit", "Hibrit", "Hibrit (Yerel+AI)", "#A78BFA");
+
+    fun usesAiModel(): Boolean = this == SMART_AI || this == HYBRID
+
+    fun isWebEngine(): Boolean = this == GOOGLE_FREE || this == BING_FREE || this == BAIDU_FREE
+
+    fun formatSourceTag(aiPreset: AiProviderPreset? = null): String {
+        return when (this) {
+            SMART_AI -> if (aiPreset != null) "[AI • ${aiPreset.shortLabelTr}]" else "[Akıllı AI]"
+            else -> "[$badgeLabelTr]"
+        }
+    }
 }
 
 data class AiModelOption(

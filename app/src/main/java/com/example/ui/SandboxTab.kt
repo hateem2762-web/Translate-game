@@ -459,22 +459,25 @@ fun SandboxSimulationCard(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            val usedEngine = uiState.sandboxState.resultEngineMode ?: uiState.config.engineMode
+                            val usedTag = usedEngine.formatSourceTag(uiState.config.aiPreset)
+                            val usedColor = Color(android.graphics.Color.parseColor(usedEngine.accentHex))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     imageVector = Icons.Rounded.CheckCircle,
                                     contentDescription = null,
-                                    tint = if (uiState.sandboxState.isAiRefining) AmberTertiary else EmeraldSuccess,
+                                    tint = if (uiState.sandboxState.isAiRefining) AmberTertiary else usedColor,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = if (uiState.sandboxState.isAiRefining) {
-                                        "Anlık Yerel (${uiState.sandboxState.latencyMs} ms) • AI İyileştiriyor…"
+                                        "$usedTag (${uiState.sandboxState.latencyMs} ms) • AI İyileştiriyor…"
                                     } else {
-                                        "OCR Algıladı (${uiState.sandboxState.latencyMs} ms)"
+                                        "$usedTag • ${uiState.sandboxState.latencyMs} ms"
                                     },
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = if (uiState.sandboxState.isAiRefining) AmberTertiary else EmeraldSuccess
+                                    color = if (uiState.sandboxState.isAiRefining) AmberTertiary else usedColor
                                 )
                             }
                             TextButton(onClick = onClearSandbox) {
@@ -534,15 +537,18 @@ private fun ClassicSandboxPreviewBox(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            val usedEngine = uiState.sandboxState.resultEngineMode ?: uiState.config.engineMode
+            val engineTag = usedEngine.formatSourceTag(uiState.config.aiPreset)
+            val engineColor = Color(android.graphics.Color.parseColor(usedEngine.accentHex))
             Text(
                 text = if (uiState.sandboxState.isAiRefining) {
-                    "KLASİK KUTU • AI İYİLEŞTİRİYOR…"
+                    "$engineTag • AI İYİLEŞTİRİYOR…"
                 } else {
                     val modeTag = if (fitMode == ClassicTextFitMode.AUTO_FIT_SHRINK) "OTO-SIĞDIR" else "ESNEK"
-                    "KLASİK KUTU ($modeTag) • ${uiState.sandboxState.latencyMs}ms"
+                    "$engineTag • KUTU ($modeTag) • ${uiState.sandboxState.latencyMs}ms"
                 },
                 style = MaterialTheme.typography.labelSmall,
-                color = if (uiState.sandboxState.isAiRefining) AmberTertiary else CyanPrimary
+                color = if (uiState.sandboxState.isAiRefining) AmberTertiary else engineColor
             )
 
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {

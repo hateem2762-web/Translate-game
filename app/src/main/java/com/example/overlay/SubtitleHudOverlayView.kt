@@ -30,9 +30,10 @@ import com.example.model.TranslatorTelemetry
 
 /**
  * Active-mode floating HUD:
- * - In CLASSIC_BOX mode: draggable & corner-resizable translucent subtitle box with independent
- *   background-only opacity, 100%-opaque outlined text, quick chips, and an "X" button that closes
- *   the active mode and returns to the floating control bubble.
+ * - In CLASSIC_BOX mode: redesigned engine-coded subtitle box with an unmistakable active-engine
+ *   pill (tapping opens the direct Engine Picker), an AI-model chip shown ONLY in AI/Hybrid modes,
+ *   a dedicated `[Google Web]` / `[Yerel ML Kiti]` telemetry source strip, and independent
+ *   background-only opacity with 100%-opaque outlined text.
  * - In IN_PLACE_BLUR mode: collapses to a compact clickable "X" close badge anchored at the edge of
  *   the active blur region (stays clickable even when ROI is locked) to return to the control bubble.
  */
@@ -45,7 +46,7 @@ class SubtitleHudOverlayView(
     private val onClassicResizeFinished: () -> Unit = {},
     private val onClassicDesiredHeightChanged: (desiredHeightPx: Int) -> Unit = {},
     private val onToggleDisplayMode: () -> Unit,
-    private val onToggleEngineMode: () -> Unit,
+    private val onOpenEnginePicker: () -> Unit,
     private val onOpenModelPicker: () -> Unit = {},
     private val onTogglePause: () -> Unit,
     private val onToggleLockRoi: () -> Unit,
@@ -65,11 +66,14 @@ class SubtitleHudOverlayView(
     private val classicWrapper: FrameLayout
     private val classicContainer: LinearLayout
     private val classicBgDrawable: GradientDrawable
+    private val headerRow: LinearLayout
+    private val sourceStripRow: LinearLayout
     private val statusDot: View
-    private val statusLabel: TextView
-    private val classicModeChip: TextView
     private val classicEngineChip: TextView
     private val classicModelChip: TextView
+    private val classicModeChip: TextView
+    private val sourceOriginBadge: TextView
+    private val statusLabel: TextView
     private val classicHistoryButton: ImageButton
     private val classicPauseButton: ImageButton
     private val classicLockButton: ImageButton
@@ -88,9 +92,10 @@ class SubtitleHudOverlayView(
 
     private var isClassicBoxStealth: Boolean = false
     private var lastClassicBoxOpacity: Float = 0.86f
+    private var lastBorderAccentColor: Int = Color.parseColor(TranslationEngineMode.OFFLINE_LOCAL.accentHex)
     private var currentDisplayMode: DisplayMode = DisplayMode.CLASSIC_BOX
     private var lastDesiredExpandedHeightPx: Int = -1
-    private val headerRow: LinearLayout
+    private var lastHasError: Boolean = false
 
     init {
         val monoFont = ResourcesCompat.getFont(context, R.font.jetbrains_mono)
@@ -101,7 +106,7 @@ class SubtitleHudOverlayView(
         classicBgDrawable = GradientDrawable().apply {
             setColor(Color.argb(220, 9, 14, 23))
             cornerRadius = dp(16f).toFloat()
-            setStroke(dp(1f), Color.argb(107, 34, 211, 238))
+            setStroke(dp(1.2f), Color.argb(120, 34, 211, 238))
         }
 
         classicContainer = LinearLayout(context).apply {
@@ -110,50 +115,53 @@ class SubtitleHudOverlayView(
             background = classicBgDrawable
         }
 
+        // Top Bar: Prominent Engine Pill + Conditional AI Model Pill + Display Mode + Utility Icons
         headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        statusDot = View(context).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#22D3EE"))
-            }
-        }
-        headerRow.addView(statusDot, LinearLayout.LayoutParams(dp(8f), dp(8f)).apply {
-            marginEnd = dp(6f)
-        })
-
-        statusLabel = TextView(context).apply {
-            text = "HAZIR"
-            setTextColor(Color.parseColor("#94A3B8"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+        classicEngineChip = TextView(context).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
             typeface = monoFont
+            paint.isFakeBoldText = true
+            gravity = Gravity.CENTER
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            setShadowLayer(3f, 0f, 1f, Color.BLACK)
+            setPadding(dp(8f), dp(3f), dp(8f), dp(3f))
+            contentDescription = "Aktif çeviri motorunu değiştir"
+            setOnClickListener { onOpenEnginePicker() }
         }
-        headerRow.addView(statusLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        headerRow.addView(
+            classicEngineChip,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(26f)).apply {
+                marginEnd = dp(4f)
+            }
+        )
 
-        classicModeChip = createToggleChip(monoFont) { onToggleDisplayMode() }
-        classicEngineChip = createToggleChip(monoFont) { onToggleEngineMode() }
         classicModelChip = createToggleChip(monoFont) { onOpenModelPicker() }.apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
-            maxWidth = dp(78f)
+            maxWidth = dp(76f)
             contentDescription = "AI modelini seç"
+            visibility = View.GONE
         }
+        headerRow.addView(
+            classicModelChip,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(26f)).apply {
+                marginEnd = dp(4f)
+            }
+        )
 
-        headerRow.addView(classicModeChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(26f)).apply {
-            marginEnd = dp(3f)
-        })
-        headerRow.addView(classicEngineChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(26f)).apply {
-            marginEnd = dp(3f)
-        })
-        headerRow.addView(classicModelChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(26f)).apply {
-            marginEnd = dp(2f)
-        })
+        classicModeChip = createToggleChip(monoFont) { onToggleDisplayMode() }
+        headerRow.addView(
+            classicModeChip,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(26f)).apply {
+                marginEnd = dp(2f)
+            }
+        )
+
+        headerRow.addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
 
         classicHistoryButton = createHudButton(R.drawable.ic_hud_history, "Diyalog geçmişini aç", sizeDp = 28f) {
             onOpenHistory()
@@ -191,12 +199,61 @@ class SubtitleHudOverlayView(
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         )
 
+        // Dedicated Telemetry & True Engine Origin Strip: "[Google Web] • 142ms"
+        sourceStripRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2f), dp(3f), dp(2f), dp(2f))
+        }
+
+        statusDot = View(context).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#22D3EE"))
+            }
+        }
+        sourceStripRow.addView(statusDot, LinearLayout.LayoutParams(dp(7f), dp(7f)).apply {
+            marginEnd = dp(6f)
+        })
+
+        sourceOriginBadge = TextView(context).apply {
+            text = "[Yerel ML Kiti]"
+            setTextColor(Color.parseColor("#22D3EE"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+            typeface = monoFont
+            paint.isFakeBoldText = true
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        sourceStripRow.addView(
+            sourceOriginBadge,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = dp(6f)
+            }
+        )
+
+        statusLabel = TextView(context).apply {
+            text = "HAZIR"
+            setTextColor(Color.parseColor("#94A3B8"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+            typeface = monoFont
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            setShadowLayer(3f, 0f, 1f, Color.BLACK)
+        }
+        sourceStripRow.addView(statusLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        classicContainer.addView(
+            sourceStripRow,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+
         textScrollView = ScrollView(context).apply {
             isVerticalScrollBarEnabled = true
             isScrollbarFadingEnabled = true
             scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-            setPadding(0, dp(3f), 0, 0)
+            setPadding(0, dp(2f), 0, 0)
         }
 
         val textStack = LinearLayout(context).apply {
@@ -262,6 +319,7 @@ class SubtitleHudOverlayView(
         )
 
         setupDragListener(headerRow)
+        setupDragListener(sourceStripRow)
         setupTextAreaDragOrScroll(textScrollView)
         setupClassicResizeListener(classicResizeGrip)
 
@@ -307,7 +365,7 @@ class SubtitleHudOverlayView(
         }
         inPlaceHandleContainer.addView(
             inPlaceErrorBanner,
-            LinearLayout.LayoutParams(dp(220f), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            LinearLayout.LayoutParams(dp(230f), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = dp(4f)
             }
         )
@@ -327,28 +385,43 @@ class SubtitleHudOverlayView(
             classicBgDrawable.setStroke(0, Color.TRANSPARENT)
         } else {
             val bgAlpha = (clamped * 255f).toInt().coerceIn(0, 255)
-            val borderAlpha = (clamped * 0.42f * 255f).toInt().coerceIn(0, 255)
+            val borderColor = if (lastHasError) Color.parseColor("#FB7185") else lastBorderAccentColor
+            val borderAlpha = if (lastHasError) 230 else (clamped * 0.55f * 255f).toInt().coerceIn(0, 255)
             classicBgDrawable.setColor(Color.argb(bgAlpha, 9, 14, 23))
-            classicBgDrawable.setStroke(dp(1f), Color.argb(borderAlpha, 34, 211, 238))
+            classicBgDrawable.setStroke(
+                dp(if (lastHasError) 1.5f else 1.2f),
+                Color.argb(borderAlpha, Color.red(borderColor), Color.green(borderColor), Color.blue(borderColor))
+            )
         }
         translatedTextView.alpha = 1f
         originalTextView.alpha = 1f
     }
 
-    private fun applyClassicStealthVisibility() {
+    private fun applyClassicStealthVisibility(showAiModelChip: Boolean = classicModelChip.visibility == View.VISIBLE) {
         val stealth = isClassicBoxStealth
         val chromeVis = if (stealth) View.INVISIBLE else View.VISIBLE
         val interactive = !stealth
 
-        statusDot.visibility = chromeVis
-        statusLabel.visibility = chromeVis
+        sourceStripRow.visibility = if (stealth) View.GONE else View.VISIBLE
 
-        listOf(classicModeChip, classicEngineChip, classicModelChip).forEach { chip ->
-            chip.visibility = chromeVis
-            chip.isClickable = interactive
-            chip.isEnabled = interactive
+        classicEngineChip.visibility = chromeVis
+        classicEngineChip.isClickable = interactive
+        classicEngineChip.isEnabled = interactive
+
+        classicModeChip.visibility = chromeVis
+        classicModeChip.isClickable = interactive
+        classicModeChip.isEnabled = interactive
+
+        if (showAiModelChip) {
+            classicModelChip.visibility = chromeVis
+            classicModelChip.isClickable = interactive
+            classicModelChip.isEnabled = interactive
+        } else {
+            classicModelChip.visibility = View.GONE
+            classicModelChip.isClickable = false
+            classicModelChip.isEnabled = false
         }
-        // Keep X close-to-bubble button accessible or restore with stealth button
+
         listOf(classicHistoryButton, classicPauseButton, classicLockButton).forEach { btn ->
             btn.visibility = chromeVis
             btn.isClickable = interactive
@@ -385,25 +458,21 @@ class SubtitleHudOverlayView(
     }
 
     fun render(telemetry: TranslatorTelemetry, showOriginal: Boolean) {
+        val selectedEngine = telemetry.engineMode
+        val engineAccentHex = selectedEngine.accentHex
+        val engineAccentColor = Color.parseColor(engineAccentHex)
+        lastBorderAccentColor = engineAccentColor
+        lastHasError = telemetry.errorMessage != null
+
         val dotColor = when {
             telemetry.status == ServiceStatus.PAUSED -> Color.parseColor("#64748B")
             telemetry.errorMessage != null -> Color.parseColor("#FB7185")
             telemetry.isStabilizing || telemetry.isAiRefining -> Color.parseColor("#F59E0B")
-            else -> Color.parseColor("#22D3EE")
+            else -> engineAccentColor
         }
         (statusDot.background as? GradientDrawable)?.setColor(dotColor)
 
         val isBlur = telemetry.displayMode == DisplayMode.IN_PLACE_BLUR
-        val engineAccentHex = when (telemetry.engineMode) {
-            TranslationEngineMode.HYBRID -> "#A78BFA"
-            TranslationEngineMode.SMART_AI -> "#F59E0B"
-            TranslationEngineMode.OFFLINE_LOCAL -> "#22D3EE"
-            TranslationEngineMode.GOOGLE_FREE,
-            TranslationEngineMode.BING_FREE,
-            TranslationEngineMode.BAIDU_FREE -> "#22D3EE"
-        }
-        val engineHighlighted = telemetry.engineMode != TranslationEngineMode.OFFLINE_LOCAL
-
         if (isBlur != (currentDisplayMode == DisplayMode.IN_PLACE_BLUR) ||
             (isBlur && inPlaceHandleContainer.visibility != View.VISIBLE) ||
             (!isBlur && classicWrapper.visibility != View.VISIBLE)
@@ -421,50 +490,70 @@ class SubtitleHudOverlayView(
         if (isBlur) {
             inPlaceCloseBg.setStroke(
                 dp(1.4f),
-                if (telemetry.errorMessage != null) Color.parseColor("#FB7185") else Color.parseColor(engineAccentHex)
+                if (telemetry.errorMessage != null) Color.parseColor("#FB7185") else engineAccentColor
             )
             if (telemetry.errorMessage != null) {
                 inPlaceErrorBanner.visibility = View.VISIBLE
-                inPlaceErrorBanner.text = telemetry.errorMessage
+                inPlaceErrorBanner.text = "${selectedEngine.formatSourceTag(telemetry.aiPreset)} ${telemetry.errorMessage}"
             } else {
                 inPlaceErrorBanner.visibility = View.GONE
             }
             return
         }
 
-        // Classic Box updates
+        // 1. Prominent Active Engine Pill (tap opens EnginePickerOverlayView)
+        classicEngineChip.text = when (selectedEngine) {
+            TranslationEngineMode.SMART_AI -> "AI • ${telemetry.aiPreset.shortLabelTr} ▾"
+            else -> "${selectedEngine.badgeLabelTr} ▾"
+        }
+        styleEnginePill(classicEngineChip, engineAccentColor)
+
+        // 2. AI Model Pill — ONLY shown when SMART_AI or HYBRID is active!
+        val showAiModel = selectedEngine.usesAiModel()
+        if (showAiModel) {
+            classicModelChip.text = compactModelLabel(telemetry.aiModelName)
+            styleChip(classicModelChip, highlighted = true, highlightColor = "#F59E0B")
+        }
+
+        // 3. Display Mode Pill
         classicModeChip.text = telemetry.displayMode.shortLabelTr
-        styleChip(classicModeChip, highlighted = false, highlightColor = "#22D3EE")
-
-        classicEngineChip.text = telemetry.engineMode.shortLabelTr
-        styleChip(classicEngineChip, highlighted = engineHighlighted, highlightColor = engineAccentHex)
-
-        val shortModel = compactModelLabel(telemetry.aiModelName)
-        classicModelChip.text = shortModel
-        styleChip(classicModelChip, highlighted = engineHighlighted, highlightColor = "#F59E0B")
+        styleChip(classicModeChip, highlighted = false, highlightColor = "#94A3B8")
 
         val pauseRes = if (telemetry.status == ServiceStatus.PAUSED) R.drawable.ic_hud_play else R.drawable.ic_hud_pause
         val lockRes = if (telemetry.isRoiLocked) R.drawable.ic_hud_lock else R.drawable.ic_hud_unlock
         classicPauseButton.setImageResource(pauseRes)
         classicLockButton.setImageResource(lockRes)
 
-        applyClassicStealthVisibility()
+        applyClassicStealthVisibility(showAiModelChip = showAiModel)
+
+        // 4. Dedicated Source Origin Badge + Latency Telemetry Strip
+        val effectiveOriginEngine = telemetry.lastResultEngineMode ?: selectedEngine
+        val originColor = if (telemetry.errorMessage != null) {
+            Color.parseColor("#FB7185")
+        } else {
+            Color.parseColor(effectiveOriginEngine.accentHex)
+        }
+        sourceOriginBadge.text = effectiveOriginEngine.formatSourceTag(telemetry.aiPreset)
+        sourceOriginBadge.setTextColor(originColor)
 
         statusLabel.text = when {
-            telemetry.status == ServiceStatus.PAUSED -> "DURAKLAT"
-            telemetry.errorMessage != null -> "HATA"
-            telemetry.isStabilizing -> "BEKLE…"
-            telemetry.isAiRefining -> "AI DÜZELTİYOR…"
+            telemetry.status == ServiceStatus.PAUSED -> "• DURAKLATILDI"
+            telemetry.errorMessage != null -> "• HATA"
+            telemetry.isStabilizing -> "• SABİTLENİYOR…"
+            telemetry.isAiRefining -> "• AI DÜZELTİYOR…"
             telemetry.lastFromCache && telemetry.currentTranslatedText.isNotEmpty() ->
-                "CACHE ${telemetry.lastLatencyMs}ms"
+                "• ÖNBELLEK (${telemetry.lastLatencyMs}ms)"
             telemetry.currentTranslatedText.isNotEmpty() ->
-                "${telemetry.lastLatencyMs}ms"
-            else -> "HAZIR"
+                "• ${telemetry.lastLatencyMs}ms"
+            else -> "• HAZIR"
         }
 
         val targetSp = telemetry.fontSizeSp.coerceIn(12f, 32f)
         translatedTextView.visibility = View.VISIBLE
-        translatedTextView.setTextColor(telemetry.subtitleTextColorArgb)
+        translatedTextView.setTextColor(
+            if (telemetry.errorMessage != null) Color.parseColor("#FECDD3")
+            else telemetry.subtitleTextColorArgb
+        )
 
         val nextText = when {
             telemetry.errorMessage != null -> telemetry.errorMessage
@@ -478,12 +567,13 @@ class SubtitleHudOverlayView(
             dp(telemetry.classicBoxWidthDp.coerceIn(200, 440).toFloat())
         }
         val availTextW = (boxW - dp(22f)).coerceAtLeast(dp(120f))
-        val headerH = if (headerRow.height > 0) headerRow.height else dp(32f)
+        val headerH = if (headerRow.height > 0) headerRow.height else dp(28f)
+        val stripH = if (!isClassicBoxStealth && sourceStripRow.height > 0) sourceStripRow.height else if (isClassicBoxStealth) 0 else dp(18f)
         val baseBoxH = dp(telemetry.classicBoxHeightDp.coerceIn(84, 340).toFloat())
-        val verticalChromePx = headerH + dp(20f)
+        val verticalChromePx = headerH + stripH + dp(20f)
         val availTextH = (baseBoxH - verticalChromePx).coerceAtLeast(dp(24f))
 
-        val showOrigRow = !isClassicBoxStealth && showOriginal && telemetry.currentSourceText.isNotBlank()
+        val showOrigRow = !isClassicBoxStealth && showOriginal && telemetry.currentSourceText.isNotBlank() && telemetry.errorMessage == null
         val origExtraH = if (showOrigRow) {
             val origSp = (targetSp - 3.5f).coerceAtLeast(11f)
             measurePaint.textSize = origSp * scaledDensity
@@ -543,6 +633,14 @@ class SubtitleHudOverlayView(
         }
     }
 
+    private fun styleEnginePill(chip: TextView, accent: Int) {
+        chip.setTextColor(Color.parseColor("#061019"))
+        chip.background = GradientDrawable().apply {
+            cornerRadius = dp(9f).toFloat()
+            setColor(accent)
+        }
+    }
+
     private fun resolveAutoFitFontSp(
         text: String,
         targetSp: Float,
@@ -585,7 +683,7 @@ class SubtitleHudOverlayView(
         return when {
             tail.equals("gemini-2.5-flash-lite", ignoreCase = true) -> "2.5-lite"
             tail.equals("gemini-2.5-flash", ignoreCase = true) -> "2.5-flash"
-            tail.length > 13 -> tail.take(12) + "…"
+            tail.length > 11 -> tail.take(10) + "…"
             else -> tail.ifBlank { "Model" }
         }
     }

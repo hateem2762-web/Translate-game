@@ -67,6 +67,7 @@ data class TranslatorTelemetry(
     val isRoiLocked: Boolean = false,
     val lastFromCache: Boolean = false,
     val lastLatencyMs: Long = 0L,
+    val lastResultEngineMode: TranslationEngineMode? = null,
     val framesProcessed: Long = 0L,
     val framesSkippedSameText: Long = 0L,
     val cacheHits: Long = 0L,

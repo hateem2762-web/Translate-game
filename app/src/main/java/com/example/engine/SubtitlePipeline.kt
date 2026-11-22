@@ -29,6 +29,7 @@ data class PipelineOutput(
     val framesSkipped: Long = 0L,
     val cacheHits: Long = 0L,
     val errorMessage: String? = null,
+    val resultEngineMode: TranslationEngineMode? = null,
     val lastCompletedEntry: SubtitleEntry? = null
 )
 
@@ -574,6 +575,7 @@ class SubtitlePipeline(
             latencyMs = latencyMs,
             cacheHits = if (fromCache) prev.cacheHits + 1 else prev.cacheHits,
             errorMessage = null,
+            resultEngineMode = entryEngine,
             lastCompletedEntry = entry
         )
     }
@@ -684,8 +686,18 @@ class SubtitlePipeline(
         config: TranslationConfig
     ) {
         val provider = providers[config.engineMode]
-            ?: providers[TranslationEngineMode.OFFLINE_LOCAL]
-            ?: return
+        if (provider == null) {
+            recyclePendingSnapshot()
+            _output.value = _output.value.copy(
+                translatedText = "",
+                inPlaceBlocks = emptyList(),
+                isStabilizing = false,
+                isAiRefining = false,
+                resultEngineMode = config.engineMode,
+                errorMessage = "${config.engineMode.fullTitleTr} motoru hazır değil."
+            )
+            return
+        }
 
         val isChinese = config.sourceLangCode == TranslateLanguage.CHINESE
         val startTime = System.currentTimeMillis()
@@ -830,6 +842,7 @@ class SubtitlePipeline(
                 latencyMs = latency,
                 cacheHits = if (pureCacheHit) prev.cacheHits + 1 else prev.cacheHits,
                 errorMessage = null,
+                resultEngineMode = config.engineMode,
                 lastCompletedEntry = entry
             )
         } catch (e: CancellationException) {
@@ -838,8 +851,11 @@ class SubtitlePipeline(
         } catch (e: Exception) {
             recyclePendingSnapshot()
             _output.value = _output.value.copy(
+                translatedText = "",
+                inPlaceBlocks = emptyList(),
                 isStabilizing = false,
                 isAiRefining = false,
+                resultEngineMode = config.engineMode,
                 errorMessage = e.localizedMessage ?: "Çeviri başarısız."
             )
         }

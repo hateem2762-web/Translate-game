@@ -158,17 +158,19 @@ internal fun GeneralAiTabContent(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EngineAndModelPackCard(
     uiState: MainUiState,
     onSelectEngineMode: (TranslationEngineMode) -> Unit,
     onDownloadModelClick: () -> Unit
 ) {
+    val activeMode = uiState.config.engineMode
+    val activeColor = Color(android.graphics.Color.parseColor(activeMode.accentHex))
+
     Card(
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = ObsidianSurface),
-        border = BorderStroke(1.dp, ObsidianOutline)
+        border = BorderStroke(1.dp, activeColor.copy(alpha = 0.45f))
     ) {
         Column(
             modifier = Modifier
@@ -176,97 +178,147 @@ private fun EngineAndModelPackCard(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Rounded.AutoAwesome,
-                    contentDescription = null,
-                    tint = CyanPrimary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Çeviri Motoru",
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-
-            FlowRow(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                TranslationEngineMode.entries.forEach { mode ->
-                    val selected = uiState.config.engineMode == mode
-                    val label = when (mode) {
-                        TranslationEngineMode.OFFLINE_LOCAL -> "Yerel (ML Kit)"
-                        TranslationEngineMode.HYBRID -> "Hibrit"
-                        TranslationEngineMode.SMART_AI -> "AI (Groq/Gemini)"
-                        TranslationEngineMode.GOOGLE_FREE -> "Google (Ücretsiz)"
-                        TranslationEngineMode.BING_FREE -> "Bing (Ücretsiz)"
-                        TranslationEngineMode.BAIDU_FREE -> "Baidu (Çince)"
-                    }
-                    FilterChip(
-                        selected = selected,
-                        onClick = { onSelectEngineMode(mode) },
-                        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .testTag("engine_mode_${mode.name.lowercase()}"),
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = when (mode) {
-                                TranslationEngineMode.HYBRID -> Color(0xFFA78BFA).copy(alpha = 0.22f)
-                                TranslationEngineMode.SMART_AI -> AmberTertiary.copy(alpha = 0.22f)
-                                TranslationEngineMode.GOOGLE_FREE,
-                                TranslationEngineMode.BING_FREE,
-                                TranslationEngineMode.BAIDU_FREE -> CyanPrimary.copy(alpha = 0.22f)
-                                TranslationEngineMode.OFFLINE_LOCAL -> CyanContainer
-                            },
-                            selectedLabelColor = when (mode) {
-                                TranslationEngineMode.HYBRID -> Color(0xFFA78BFA)
-                                TranslationEngineMode.SMART_AI -> AmberTertiary
-                                TranslationEngineMode.GOOGLE_FREE,
-                                TranslationEngineMode.BING_FREE,
-                                TranslationEngineMode.BAIDU_FREE -> CyanPrimary
-                                TranslationEngineMode.OFFLINE_LOCAL -> CyanPrimary
-                            }
-                        )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        tint = activeColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Çeviri Motoru",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = activeColor.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, activeColor.copy(alpha = 0.5f))
+                ) {
+                    Text(
+                        text = "Aktif: ${activeMode.badgeLabelTr}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = activeColor,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }
 
+            // 2-column engine cards with distinct colors and clear engine types
+            val rows = TranslationEngineMode.entries.chunked(2)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                rows.forEach { pair ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        pair.forEach { mode ->
+                            val selected = activeMode == mode
+                            val accent = Color(android.graphics.Color.parseColor(mode.accentHex))
+                            val typeTag = when (mode) {
+                                TranslationEngineMode.GOOGLE_FREE -> "Web NMT • Ücretsiz"
+                                TranslationEngineMode.BING_FREE -> "Web • Ücretsiz"
+                                TranslationEngineMode.BAIDU_FREE -> "Web • Çince"
+                                TranslationEngineMode.OFFLINE_LOCAL -> "Cihaz İçi ML Kit"
+                                TranslationEngineMode.SMART_AI -> "Bulut LLM"
+                                TranslationEngineMode.HYBRID -> "Yerel + AI"
+                            }
+                            Surface(
+                                selected = selected,
+                                onClick = { onSelectEngineMode(mode) },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (selected) accent.copy(alpha = 0.16f) else ObsidianSurfaceElevated,
+                                border = BorderStroke(
+                                    width = if (selected) 1.5.dp else 1.dp,
+                                    color = if (selected) accent else ObsidianOutline
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 64.dp)
+                                    .testTag("engine_mode_${mode.name.lowercase()}")
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = mode.fullTitleTr,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (selected) accent else MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (selected) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.CheckCircle,
+                                                contentDescription = "Seçili motor",
+                                                tint = accent,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = typeTag,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (selected) accent.copy(alpha = 0.9f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                        if (pair.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+
             Text(
-                text = when (uiState.config.engineMode) {
+                text = when (activeMode) {
                     TranslationEngineMode.HYBRID ->
-                        "Sıfır bekleme: 50ms içinde Yerel çeviriyi gösterir, arka planda hızlı AI ile pürüzsüzce düzeltir."
+                        "Sıfır bekleme: 50ms içinde Yerel ML Kit önizlemesini gösterir, arka planda hızlı AI ile düzeltir."
                     TranslationEngineMode.SMART_AI ->
                         "Durumsuz ultra hızlı LLM çevirisi (Groq / Cerebras / Gemini Düşünme=0, max 120 token, %92 önbellek)."
                     TranslationEngineMode.OFFLINE_LOCAL ->
-                        "Sıfır internet gecikmesi ve kotasız sınırsız kullanım için cihaz içi ML Kit."
+                        "Yalnızca bu modda (veya Hibrit önizlemede) cihaz içi ML Kit modeli kullanılır. İnternetsiz sınırsız çeviri."
                     TranslationEngineMode.GOOGLE_FREE ->
-                        "Google Çeviri (Ücretsiz): API anahtarı gerektirmez; İngilizce ve Çince dahil tüm dillerden hızlı HTTP çevirisi."
+                        "Google Çeviri (Web NMT): Tarayıcı kalitesinde doğrudan translate.googleapis.com isteği yapar. Hata olursa yerel ML Kit'e düşmez; gerçek hatayı ekranda gösterir."
                     TranslationEngineMode.BING_FREE ->
-                        "Microsoft / Bing Çeviri (Ücretsiz): Hızlı web tabanlı çeviri ucu; otomatik hata durumunda diğer motorlara düşer."
+                        "Bing Çeviri (Web): Ücretsiz web çevirisi. Hata durumunda yerel ML Kit'e sessizce düşmez; gerçek hatayı gösterir."
                     TranslationEngineMode.BAIDU_FREE ->
-                        "Baidu Çeviri (Ücretsiz): Özellikle Çince oyun metinleri ve altyazılar için optimize edilmiş ücretsiz web motoru."
+                        "Baidu Çeviri (Web): Özellikle Çince metinler için web çeviri modu. Hata durumunda yerel ML Kit'e düşmez."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            val isFreeWebSelected = uiState.config.engineMode == TranslationEngineMode.GOOGLE_FREE ||
-                uiState.config.engineMode == TranslationEngineMode.BING_FREE ||
-                uiState.config.engineMode == TranslationEngineMode.BAIDU_FREE
-
-            if (isFreeWebSelected) {
+            if (activeMode.isWebEngine()) {
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = AmberTertiary.copy(alpha = 0.12f),
-                    border = BorderStroke(1.dp, AmberTertiary.copy(alpha = 0.35f))
+                    color = activeColor.copy(alpha = 0.10f),
+                    border = BorderStroke(1.dp, activeColor.copy(alpha = 0.35f))
                 ) {
                     Text(
-                        text = "Ücretsiz web çeviriciler API anahtarı istemez ancak çok hızlı art arda isteklerde geçici bekleme verebilir; önbellek ve bekleme süresi (debounce) açık tutulmalıdır.",
+                        text = "Saf Web Modu Aktif: İstekler yalnızca ${activeMode.badgeLabelTr} üzerinden yapılır; bağlantı veya HTTP hatası alınırsa asla ML Kit'e düşmez.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = AmberTertiary,
+                        color = activeColor,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(10.dp)
@@ -276,7 +328,10 @@ private fun EngineAndModelPackCard(
 
             HorizontalDivider(color = ObsidianOutline)
 
-            // Compact Offline ML Kit Language Pack Row
+            val usesOfflineMlKit = activeMode == TranslationEngineMode.OFFLINE_LOCAL ||
+                activeMode == TranslationEngineMode.HYBRID
+
+            // Offline ML Kit Language Pack Row (scoped clearly so Google/AI users don't think ML Kit is active)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -285,20 +340,25 @@ private fun EngineAndModelPackCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = when (uiState.modelState) {
-                            ModelDownloadState.READY -> "Çevrimdışı Dil Paketi Hazır"
+                            ModelDownloadState.READY -> "Çevrimdışı ML Kit Paketi Hazır"
                             ModelDownloadState.DOWNLOADING -> stringResource(R.string.status_downloading_model)
                             ModelDownloadState.ERROR -> "Model Hatası: ${uiState.modelError ?: "Bilinmeyen"}"
-                            else -> "Çevrimdışı Dil Paketi İndirilmedi"
+                            else -> "Çevrimdışı ML Kit Paketi İndirilmedi"
                         },
                         style = MaterialTheme.typography.labelLarge,
-                        color = when (uiState.modelState) {
-                            ModelDownloadState.READY -> EmeraldSuccess
-                            ModelDownloadState.ERROR -> MaterialTheme.colorScheme.error
+                        color = when {
+                            !usesOfflineMlKit -> MaterialTheme.colorScheme.onSurfaceVariant
+                            uiState.modelState == ModelDownloadState.READY -> EmeraldSuccess
+                            uiState.modelState == ModelDownloadState.ERROR -> MaterialTheme.colorScheme.error
                             else -> MaterialTheme.colorScheme.onSurface
                         }
                     )
                     Text(
-                        text = "Yerel ve Hibrit anlık önizleme için gereklidir (~30 MB)",
+                        text = if (usesOfflineMlKit) {
+                            "Aktif Yerel / Hibrit mod için gereklidir (~30 MB)"
+                        } else {
+                            "Pasif • Yalnızca 'Çevrimdışı ML Kit' veya 'Hibrit' seçildiğinde kullanılır"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -330,8 +390,8 @@ private fun EngineAndModelPackCard(
                     Icon(
                         imageVector = Icons.Rounded.CheckCircle,
                         contentDescription = "Dil paketi hazır",
-                        tint = EmeraldSuccess,
-                        modifier = Modifier.size(24.dp)
+                        tint = if (usesOfflineMlKit) EmeraldSuccess else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }

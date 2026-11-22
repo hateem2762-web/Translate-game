@@ -76,7 +76,7 @@ class ScreenTranslatorService : Service() {
         offlineProvider = OfflineMlKitTranslationProvider(MlKitTranslatorEngine())
         smartAiProvider = SmartAiTranslationProvider(applicationContext)
 
-        val freeWebProvider = FreeWebTranslationProvider(offlineProvider, smartAiProvider)
+        val freeWebProvider = FreeWebTranslationProvider()
 
         pipeline = SubtitlePipeline(
             scope = serviceScope,
@@ -116,7 +116,10 @@ class ScreenTranslatorService : Service() {
             onSelectTranslationMode = { mode -> selectTranslationModeFromBubble(mode) },
             onCloseActiveMode = { closeActiveModeToBubble() },
             onToggleDisplayMode = { toggleDisplayMode() },
-            onToggleEngineMode = { toggleEngineMode() },
+            onSelectEngineMode = { mode -> selectEngineMode(mode) },
+            onOpenEnginePicker = {
+                overlayController.showEnginePicker(ServiceStateHolder.telemetry.value)
+            },
             onOpenModelPicker = {
                 overlayController.showModelPicker(ServiceStateHolder.telemetry.value)
             },
@@ -235,6 +238,7 @@ class ScreenTranslatorService : Service() {
                         isAiRefining = out.isAiRefining,
                         lastFromCache = out.fromCache,
                         lastLatencyMs = out.latencyMs,
+                        lastResultEngineMode = out.resultEngineMode ?: currentConfig.engineMode,
                         framesProcessed = out.framesProcessed,
                         framesSkippedSameText = out.framesSkipped,
                         cacheHits = out.cacheHits,
@@ -538,12 +542,29 @@ class ScreenTranslatorService : Service() {
         selectTranslationModeFromBubble(next)
     }
 
-    private fun toggleEngineMode() {
-        val modes = TranslationEngineMode.entries
-        val next = modes[(modes.indexOf(currentConfig.engineMode) + 1) % modes.size]
+    private fun selectEngineMode(mode: TranslationEngineMode) {
+        if (currentConfig.engineMode == mode) return
+        pipeline.reset()
+        currentConfig = currentConfig.copy(engineMode = mode)
         serviceScope.launch(Dispatchers.IO) {
-            settingsStore.updateEngineMode(next)
+            settingsStore.updateEngineMode(mode)
         }
+        ServiceStateHolder.update {
+            it.copy(
+                engineMode = mode,
+                lastResultEngineMode = mode,
+                currentSourceText = "",
+                currentTranslatedText = "",
+                inPlaceBlocks = emptyList(),
+                isStabilizing = false,
+                isAiRefining = false,
+                errorMessage = null
+            )
+        }
+        overlayController.updateHud(
+            telemetry = ServiceStateHolder.telemetry.value,
+            showOriginal = currentConfig.showOriginalText
+        )
     }
 
     private fun togglePause() {

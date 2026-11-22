@@ -270,28 +270,33 @@ class DialogueHistoryOverlayView(
 
         val topMetaRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.TOP
+            gravity = Gravity.CENTER_VERTICAL
         }
 
-        val sourceView = TextView(context).apply {
-            text = entry.sourceText
-            setTextColor(Color.parseColor("#94A3B8"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-            typeface = jakartaFont
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.END
+        val engineAccent = Color.parseColor(entry.engineMode.accentHex)
+        val engineBadge = TextView(context).apply {
+            text = if (entry.fromCache) {
+                "${entry.engineMode.formatSourceTag()} • ÖNBELLEK"
+            } else {
+                entry.engineMode.formatSourceTag()
+            }
+            setTextColor(engineAccent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            typeface = monoFont
+            paint.isFakeBoldText = true
+            maxLines = 1
         }
         topMetaRow.addView(
-            sourceView,
+            engineBadge,
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginEnd = dp(8f)
             }
         )
 
         val timeView = TextView(context).apply {
-            text = timeFormat.format(Date(entry.timestampMs))
+            text = "${timeFormat.format(Date(entry.timestampMs))} • ${entry.latencyMs}ms"
             setTextColor(Color.parseColor("#64748B"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             typeface = monoFont
             maxLines = 1
         }
@@ -303,6 +308,21 @@ class DialogueHistoryOverlayView(
         card.addView(
             topMetaRow,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+
+        val sourceView = TextView(context).apply {
+            text = entry.sourceText
+            setTextColor(Color.parseColor("#94A3B8"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            typeface = jakartaFont
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        card.addView(
+            sourceView,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(4f)
+            }
         )
 
         val translatedView = TextView(context).apply {

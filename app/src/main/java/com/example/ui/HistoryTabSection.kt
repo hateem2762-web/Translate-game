@@ -236,28 +236,27 @@ private fun SubtitleHistoryCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val badgeText = when {
-                    entry.fromCache -> "ÖNBELLEK (${entry.engineMode.shortLabelTr})"
-                    entry.engineMode == TranslationEngineMode.HYBRID -> "HİBRİT"
-                    entry.engineMode == TranslationEngineMode.SMART_AI -> "AKILLI AI"
-                    else -> "HIZLI YEREL"
-                }
-                val badgeColor = when {
-                    entry.fromCache -> EmeraldSuccess
-                    entry.engineMode == TranslationEngineMode.HYBRID -> Color(0xFFA78BFA)
-                    entry.engineMode == TranslationEngineMode.SMART_AI -> AmberTertiary
-                    else -> CyanPrimary
-                }
+                val engineColor = Color(android.graphics.Color.parseColor(entry.engineMode.accentHex))
+                val engineTag = entry.engineMode.formatSourceTag()
+                val badgeText = if (entry.fromCache) "$engineTag • ÖNBELLEK" else engineTag
+                val badgeColor = if (entry.fromCache) EmeraldSuccess else engineColor
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = badgeText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = badgeColor,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    Surface(
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
+                        color = badgeColor.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.38f))
+                    ) {
+                        Text(
+                            text = badgeText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = badgeColor,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
                     Text(
                         text = "$timeText • ${entry.latencyMs} ms",
                         style = MaterialTheme.typography.labelSmall,

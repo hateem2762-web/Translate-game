@@ -354,19 +354,40 @@ private fun HeroHeaderBar(uiState: MainUiState) {
                 }
             }
             Spacer(modifier = Modifier.width(10.dp))
-            Column {
-                Text(
-                    text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+            val engineColor = Color(android.graphics.Color.parseColor(uiState.config.engineMode.accentHex))
+            val engineTag = uiState.config.engineMode.formatSourceTag(uiState.config.aiPreset)
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = engineColor.copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, engineColor.copy(alpha = 0.45f))
+                    ) {
+                        Text(
+                            text = engineTag,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = engineColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                        )
+                    }
+                }
                 val subText = when {
                     uiState.telemetry.status == ServiceStatus.RUNNING &&
                         uiState.telemetry.overlayHubStage == OverlayHubStage.BUBBLE_IDLE ->
                         "Balona dokunup çeviri modunu seçin • ${uiState.config.bubbleTheme.labelTr}"
                     uiState.telemetry.framesProcessed > 0 || uiState.telemetry.framesSkippedSameText > 0 ->
                         "Kare: ${uiState.telemetry.framesProcessed} • Atlanan: ${uiState.telemetry.framesSkippedSameText} • Cache: ${uiState.telemetry.cacheHits}"
-                    else -> "${uiState.config.displayMode.shortLabelTr} • ${uiState.config.engineMode.shortLabelTr} Mod"
+                    else -> "${uiState.config.displayMode.shortLabelTr} Görünüm • ${uiState.config.engineMode.fullTitleTr}"
                 }
                 Text(
                     text = subText,

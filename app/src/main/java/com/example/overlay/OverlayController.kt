@@ -15,6 +15,7 @@ import com.example.model.OverlayHubStage
 import com.example.model.RoiRect
 import com.example.model.SubtitleEntry
 import com.example.model.TranslationConfig
+import com.example.model.TranslationEngineMode
 import com.example.model.TranslatorTelemetry
 import kotlin.math.roundToInt
 
@@ -32,7 +33,8 @@ class OverlayController(
     private val onSelectTranslationMode: (DisplayMode) -> Unit,
     private val onCloseActiveMode: () -> Unit,
     private val onToggleDisplayMode: () -> Unit,
-    private val onToggleEngineMode: () -> Unit,
+    private val onSelectEngineMode: (TranslationEngineMode) -> Unit,
+    private val onOpenEnginePicker: () -> Unit,
     private val onOpenModelPicker: () -> Unit,
     private val onSelectAiPresetFromOverlay: (AiProviderPreset) -> Unit,
     private val onSelectAiModelFromOverlay: (AiProviderPreset, String) -> Unit,
@@ -57,6 +59,7 @@ class OverlayController(
 
     private var historyView: DialogueHistoryOverlayView? = null
     private var modelPickerView: ModelPickerOverlayView? = null
+    private var enginePickerView: EnginePickerOverlayView? = null
 
     private var currentRoi: RoiRect = RoiRect.defaultForScreen(1080, 1920)
     private var currentDisplayMode: DisplayMode? = null
@@ -148,7 +151,7 @@ class OverlayController(
                 applyDynamicClassicHeight(desiredPx)
             },
             onToggleDisplayMode = onToggleDisplayMode,
-            onToggleEngineMode = onToggleEngineMode,
+            onOpenEnginePicker = onOpenEnginePicker,
             onOpenModelPicker = onOpenModelPicker,
             onTogglePause = onTogglePause,
             onToggleLockRoi = onToggleLockRoi,
@@ -200,7 +203,7 @@ class OverlayController(
             onDragDockFinished = { persistDockAnchor() },
             onSelectTranslationMode = onSelectTranslationMode,
             onCloseActiveMode = onCloseActiveMode,
-            onToggleEngineMode = onToggleEngineMode,
+            onSelectEngineMode = onSelectEngineMode,
             onOpenModelPicker = onOpenModelPicker,
             onTogglePause = onTogglePause,
             onToggleLockRoi = onToggleLockRoi,
@@ -265,11 +268,12 @@ class OverlayController(
         return roiView?.awaitHiddenCommittedNs() ?: System.nanoTime()
     }
 
-    fun isHistoryVisible(): Boolean = historyView != null || modelPickerView != null
+    fun isHistoryVisible(): Boolean = historyView != null || modelPickerView != null || enginePickerView != null
 
     fun showHistory(entries: List<SubtitleEntry>) {
         if (!isShown) return
         hideModelPicker()
+        hideEnginePicker()
         val existing = historyView
         if (existing != null) {
             existing.renderEntries(entries, scrollToLatest = true)
@@ -313,6 +317,7 @@ class OverlayController(
     fun showModelPicker(telemetry: TranslatorTelemetry) {
         if (!isShown) return
         hideHistory()
+        hideEnginePicker()
         val existing = modelPickerView
         if (existing != null) {
             existing.render(
@@ -374,6 +379,51 @@ class OverlayController(
             if (it.isAttachedToWindow) windowManager.removeViewImmediate(it)
         }
         modelPickerView = null
+    }
+
+    fun showEnginePicker(telemetry: TranslatorTelemetry) {
+        if (!isShown) return
+        hideHistory()
+        hideModelPicker()
+        val existing = enginePickerView
+        if (existing != null) {
+            existing.render(telemetry.engineMode, telemetry.aiPreset, telemetry.aiModelName)
+            return
+        }
+
+        val picker = EnginePickerOverlayView(
+            context = context,
+            onSelectEngine = onSelectEngineMode,
+            onOpenModelPicker = onOpenModelPicker,
+            onDismiss = { hideEnginePicker() }
+        ).apply {
+            render(telemetry.engineMode, telemetry.aiPreset, telemetry.aiModelName)
+        }
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            overlayWindowType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+
+        windowManager.addView(picker, params)
+        enginePickerView = picker
+    }
+
+    fun hideEnginePicker() {
+        enginePickerView?.let {
+            if (it.isAttachedToWindow) windowManager.removeViewImmediate(it)
+        }
+        enginePickerView = null
     }
 
     fun setRoiLocked(locked: Boolean) {
@@ -457,6 +507,11 @@ class OverlayController(
             configured = telemetry.configuredPresets,
             catalogByPreset = telemetry.availableModelsByPreset
         )
+        enginePickerView?.render(
+            engineMode = telemetry.engineMode,
+            aiPreset = telemetry.aiPreset,
+            aiModelName = telemetry.aiModelName
+        )
     }
 
     private fun syncBubbleWindowLayout() {
@@ -478,8 +533,8 @@ class OverlayController(
             }
 
             FloatingControlBubbleOverlayView.VisualPresentation.MENU_WITH_BUBBLE -> {
-                val menuApproxW = dp(312f)
-                val menuApproxH = dp(380f)
+                val menuApproxW = dp(332f)
+                val menuApproxH = dp(430f)
                 val anchorY = if (currentHubStage == OverlayHubStage.ACTIVE_MODE &&
                     currentBubbleBehavior == FloatingBubbleBehavior.DOCK_HALF_CIRCLE
                 ) {
@@ -700,6 +755,7 @@ class OverlayController(
         if (!isShown) return
         hideHistory()
         hideModelPicker()
+        hideEnginePicker()
         roiView?.let {
             if (it.isAttachedToWindow) windowManager.removeViewImmediate(it)
         }

@@ -30,10 +30,11 @@ import kotlin.math.abs
 
 /**
  * Floating control hub for SubLens:
- * - BUBBLE_IDLE: shows a draggable circular themed control bubble; tapping opens the mode selector menu.
+ * - BUBBLE_IDLE: shows a draggable circular themed control bubble; tapping opens the mode & engine menu.
  * - ACTIVE_MODE + HIDE_WHEN_ACTIVE: smoothly hides while active mode ("Klasik Kutu" / "Doğal Blur") runs.
- * - ACTIVE_MODE + DOCK_HALF_CIRCLE: docks at the bottom-right screen edge as a themed half-circle "<" tab;
- *   tapping "<" pops open the control & mode switcher menu cleanly.
+ * - ACTIVE_MODE + DOCK_HALF_CIRCLE: docks at the bottom-right screen edge as a themed half-circle "<" tab.
+ * - Menu includes direct 1-tap buttons for all 6 engines (Google, Bing, Baidu, Yerel, Hibrit, AI)
+ *   and reveals the AI Model Picker button ONLY when AI or Hybrid mode is selected.
  */
 @SuppressLint("ViewConstructor")
 class FloatingControlBubbleOverlayView(
@@ -44,7 +45,7 @@ class FloatingControlBubbleOverlayView(
     private val onDragDockFinished: () -> Unit,
     private val onSelectTranslationMode: (DisplayMode) -> Unit,
     private val onCloseActiveMode: () -> Unit,
-    private val onToggleEngineMode: () -> Unit,
+    private val onSelectEngineMode: (TranslationEngineMode) -> Unit,
     private val onOpenModelPicker: () -> Unit,
     private val onTogglePause: () -> Unit,
     private val onToggleLockRoi: () -> Unit,
@@ -71,6 +72,7 @@ class FloatingControlBubbleOverlayView(
     private val menuBgDrawable: GradientDrawable
 
     private val menuHeaderTitle: TextView
+    private val menuActiveEngineBadge: TextView
     private val menuCloseBtn: ImageButton
 
     private val classicModeBtn: LinearLayout
@@ -83,7 +85,7 @@ class FloatingControlBubbleOverlayView(
     private val blurModeSub: TextView
     private val blurModeBadge: TextView
 
-    private val engineChip: TextView
+    private val engineGridButtons: Map<TranslationEngineMode, TextView>
     private val modelChip: TextView
 
     private val historyBtn: ImageButton
@@ -137,6 +139,9 @@ class FloatingControlBubbleOverlayView(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        val titleCol = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
         menuHeaderTitle = TextView(context).apply {
             text = context.getString(R.string.bubble_menu_title)
             setTextColor(Color.WHITE)
@@ -146,16 +151,28 @@ class FloatingControlBubbleOverlayView(
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
+        menuActiveEngineBadge = TextView(context).apply {
+            text = "Aktif: [Yerel ML Kiti]"
+            setTextColor(Color.parseColor("#22D3EE"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+            typeface = monoFont
+            paint.isFakeBoldText = true
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        titleCol.addView(menuHeaderTitle)
+        titleCol.addView(menuActiveEngineBadge)
+
         menuCloseBtn = createActionIcon(R.drawable.ic_hud_close, "Menüyü kapat", sizeDp = 28f) {
             collapseMenu()
         }
-        header.addView(menuHeaderTitle, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(titleCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         header.addView(menuCloseBtn)
         menuCard.addView(header, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         // Mode Picker Section
         val modesLabel = TextView(context).apply {
-            text = "ÇEVİRİ MODUNU SEÇ"
+            text = "GÖRÜNÜM MODU"
             setTextColor(Color.parseColor("#94A3B8"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
             typeface = monoFont
@@ -164,7 +181,7 @@ class FloatingControlBubbleOverlayView(
             modesLabel,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = dp(8f)
-                bottomMargin = dp(5f)
+                bottomMargin = dp(4f)
             }
         )
 
@@ -184,7 +201,7 @@ class FloatingControlBubbleOverlayView(
         menuCard.addView(
             classicModeBtn,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = dp(6f)
+                bottomMargin = dp(5f)
             }
         )
 
@@ -208,26 +225,76 @@ class FloatingControlBubbleOverlayView(
             }
         )
 
-        // Engine & Model Row
-        val engineRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        // Direct 2x3 Engine Grid (Zero blind cycling!)
+        val engineLabel = TextView(context).apply {
+            text = "ÇEVİRİ MOTORU (DOĞRUDAN SEÇ)"
+            setTextColor(Color.parseColor("#94A3B8"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+            typeface = monoFont
         }
-        engineChip = createChipText(monoFont) { onToggleEngineMode() }
+        menuCard.addView(
+            engineLabel,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(4f)
+            }
+        )
+
+        val btnMap = LinkedHashMap<TranslationEngineMode, TextView>()
+        val row1Modes = listOf(
+            TranslationEngineMode.GOOGLE_FREE,
+            TranslationEngineMode.BING_FREE,
+            TranslationEngineMode.BAIDU_FREE
+        )
+        val row2Modes = listOf(
+            TranslationEngineMode.OFFLINE_LOCAL,
+            TranslationEngineMode.HYBRID,
+            TranslationEngineMode.SMART_AI
+        )
+
+        fun buildEngineRow(modes: List<TranslationEngineMode>, bottomMarginDp: Float): LinearLayout {
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            modes.forEachIndexed { idx, mode ->
+                val chip = createChipText(monoFont) { onSelectEngineMode(mode) }.apply {
+                    text = mode.shortLabelTr
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                }
+                btnMap[mode] = chip
+                row.addView(
+                    chip,
+                    LinearLayout.LayoutParams(0, dp(31f), 1f).apply {
+                        if (idx > 0) marginStart = dp(4f)
+                    }
+                )
+            }
+            return row.also {
+                menuCard.addView(
+                    it,
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = dp(bottomMarginDp)
+                    }
+                )
+            }
+        }
+
+        buildEngineRow(row1Modes, bottomMarginDp = 4f)
+        buildEngineRow(row2Modes, bottomMarginDp = 6f)
+        engineGridButtons = btnMap
+
+        // AI Model Picker Chip — visible ONLY when AI or Hybrid mode is active!
         modelChip = createChipText(monoFont) {
             collapseMenu()
             onOpenModelPicker()
         }.apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
+            visibility = View.GONE
         }
-        engineRow.addView(engineChip, LinearLayout.LayoutParams(0, dp(32f), 0.9f).apply {
-            marginEnd = dp(6f)
-        })
-        engineRow.addView(modelChip, LinearLayout.LayoutParams(0, dp(32f), 1.1f))
         menuCard.addView(
-            engineRow,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            modelChip,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(32f)).apply {
                 bottomMargin = dp(8f)
             }
         )
@@ -332,7 +399,7 @@ class FloatingControlBubbleOverlayView(
 
         rootRow.addView(
             menuCard,
-            LinearLayout.LayoutParams(dp(236f), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            LinearLayout.LayoutParams(dp(256f), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 marginEnd = dp(8f)
             }
         )
@@ -372,8 +439,8 @@ class FloatingControlBubbleOverlayView(
         refreshPresentation(animateTransition = false)
         onLayoutRequirementChanged()
         menuCard.visibility = View.VISIBLE
-        menuCard.pivotX = menuCard.width.toFloat().coerceAtLeast(dp(220f).toFloat())
-        menuCard.pivotY = menuCard.height.toFloat().coerceAtLeast(dp(180f).toFloat())
+        menuCard.pivotX = menuCard.width.toFloat().coerceAtLeast(dp(240f).toFloat())
+        menuCard.pivotY = menuCard.height.toFloat().coerceAtLeast(dp(200f).toFloat())
         menuCard.alpha = 0f
         menuCard.scaleX = 0.86f
         menuCard.scaleY = 0.86f
@@ -398,11 +465,12 @@ class FloatingControlBubbleOverlayView(
         menuBgDrawable.setColor(spec.menuBgColor)
         menuBgDrawable.setStroke(dp(1.2f), spec.menuBorderColor)
 
+        val engineAccent = Color.parseColor(telemetry.engineMode.accentHex)
         val dotColor = when {
             telemetry.status == ServiceStatus.PAUSED -> Color.parseColor("#64748B")
             telemetry.errorMessage != null -> Color.parseColor("#FB7185")
             telemetry.isStabilizing || telemetry.isAiRefining -> Color.parseColor("#F59E0B")
-            currentStage == OverlayHubStage.ACTIVE_MODE -> Color.parseColor("#10B981")
+            currentStage == OverlayHubStage.ACTIVE_MODE -> engineAccent
             else -> spec.accentColor
         }
 
@@ -410,6 +478,9 @@ class FloatingControlBubbleOverlayView(
         bubbleView.statusDotColor = dotColor
         dockView.theme = currentTheme
         dockView.statusDotColor = dotColor
+
+        menuActiveEngineBadge.text = "Aktif: ${telemetry.engineMode.formatSourceTag(telemetry.aiPreset)}"
+        menuActiveEngineBadge.setTextColor(engineAccent)
 
         // Mode options state
         val isActive = currentStage == OverlayHubStage.ACTIVE_MODE
@@ -430,20 +501,21 @@ class FloatingControlBubbleOverlayView(
             spec = spec
         )
 
-        // Engine & model chips
-        val engineAccent = when (telemetry.engineMode) {
-            TranslationEngineMode.HYBRID -> Color.parseColor("#A78BFA")
-            TranslationEngineMode.SMART_AI -> Color.parseColor("#F59E0B")
-            TranslationEngineMode.OFFLINE_LOCAL -> spec.accentColor
-            TranslationEngineMode.GOOGLE_FREE,
-            TranslationEngineMode.BING_FREE,
-            TranslationEngineMode.BAIDU_FREE -> Color.parseColor("#22D3EE")
+        // Direct 2x3 Engine Grid styling
+        engineGridButtons.forEach { (mode, chip) ->
+            val selected = telemetry.engineMode == mode
+            val accent = Color.parseColor(mode.accentHex)
+            styleEngineGridChip(chip, accent, selected)
         }
-        engineChip.text = "Motor: ${telemetry.engineMode.shortLabelTr}"
-        styleChip(engineChip, engineAccent, highlighted = telemetry.engineMode != TranslationEngineMode.OFFLINE_LOCAL)
 
-        modelChip.text = compactModelLabel(telemetry.aiModelName)
-        styleChip(modelChip, Color.parseColor("#F59E0B"), highlighted = telemetry.engineMode != TranslationEngineMode.OFFLINE_LOCAL)
+        // AI Model Picker Chip — shown ONLY when SMART_AI or HYBRID is active!
+        if (telemetry.engineMode.usesAiModel()) {
+            modelChip.visibility = View.VISIBLE
+            modelChip.text = "${telemetry.aiPreset.shortLabelTr} • ${compactModelLabel(telemetry.aiModelName)}"
+            styleChip(modelChip, Color.parseColor("#F59E0B"), highlighted = true)
+        } else {
+            modelChip.visibility = View.GONE
+        }
 
         pauseBtn.setImageResource(if (telemetry.status == ServiceStatus.PAUSED) R.drawable.ic_hud_play else R.drawable.ic_hud_pause)
         lockBtn.setImageResource(if (telemetry.isRoiLocked) R.drawable.ic_hud_lock else R.drawable.ic_hud_unlock)
@@ -619,12 +691,28 @@ class FloatingControlBubbleOverlayView(
         }
     }
 
+    private fun styleEngineGridChip(chip: TextView, accent: Int, selected: Boolean) {
+        chip.paint.isFakeBoldText = selected
+        chip.setTextColor(if (selected) Color.parseColor("#061019") else Color.parseColor("#CBD5E1"))
+        chip.background = GradientDrawable().apply {
+            cornerRadius = dp(9f).toFloat()
+            setColor(
+                if (selected) accent
+                else Color.argb(135, 15, 23, 42)
+            )
+            setStroke(
+                dp(1f),
+                if (selected) accent else Color.argb(90, 100, 116, 139)
+            )
+        }
+    }
+
     private fun createChipText(font: android.graphics.Typeface?, onClick: () -> Unit): TextView {
         return TextView(context).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
             typeface = font
             gravity = Gravity.CENTER
-            setPadding(dp(8f), dp(4f), dp(8f), dp(4f))
+            setPadding(dp(6f), dp(4f), dp(6f), dp(4f))
             setOnClickListener { onClick() }
         }
     }
@@ -755,10 +843,10 @@ class FloatingControlBubbleOverlayView(
     private fun compactModelLabel(modelId: String): String {
         val tail = modelId.substringAfterLast('/').removeSuffix(":free")
         return when {
-            tail.equals("gemini-2.5-flash-lite", ignoreCase = true) -> "Model: 2.5-lite"
-            tail.equals("gemini-2.5-flash", ignoreCase = true) -> "Model: 2.5-flash"
-            tail.length > 12 -> "Model: ${tail.take(10)}…"
-            else -> "Model: ${tail.ifBlank { "Seç" }}"
+            tail.equals("gemini-2.5-flash-lite", ignoreCase = true) -> "2.5-lite"
+            tail.equals("gemini-2.5-flash", ignoreCase = true) -> "2.5-flash"
+            tail.length > 14 -> "${tail.take(13)}…"
+            else -> tail.ifBlank { "Model Seç" }
         }
     }
 

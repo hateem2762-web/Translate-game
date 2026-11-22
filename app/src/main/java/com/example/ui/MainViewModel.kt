@@ -87,7 +87,8 @@ data class SandboxState(
     val translatedText: String = "",
     val inPlaceBlocks: List<InPlaceBlock> = emptyList(),
     val latencyMs: Long = 0L,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val resultEngineMode: TranslationEngineMode? = null
 )
 
 data class ModelCatalogState(
@@ -121,7 +122,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val translatorEngine = MlKitTranslatorEngine()
     private val offlineTranslator = OfflineMlKitTranslationProvider(translatorEngine)
     private val smartAiTester = SmartAiTranslationProvider(appContext)
-    private val freeWebTester = FreeWebTranslationProvider(offlineTranslator, smartAiTester)
+    private val freeWebTester = FreeWebTranslationProvider()
     private val sandboxOcrEngine = MlKitOcrEngine()
 
     private val screenBounds = ScreenMetricsHelper.getScreenBounds(appContext)
@@ -496,7 +497,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sandboxStatusState.value = sandboxStatusState.value.copy(
             isRunning = true,
             isAiRefining = false,
-            errorMessage = null
+            errorMessage = null,
+            resultEngineMode = null
         )
 
         viewModelScope.launch {
@@ -589,7 +591,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 translatedText = localRes.second,
                                 inPlaceBlocks = localRes.first,
                                 latencyMs = localLatency,
-                                errorMessage = null
+                                errorMessage = null,
+                                resultEngineMode = TranslationEngineMode.OFFLINE_LOCAL
                             )
                         }
                     }
@@ -605,7 +608,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             translatedText = aiRes.second,
                             inPlaceBlocks = aiRes.first,
                             latencyMs = totalLatency,
-                            errorMessage = null
+                            errorMessage = null,
+                            resultEngineMode = TranslationEngineMode.SMART_AI
                         )
                     } catch (e: CancellationException) {
                         throw e
@@ -642,7 +646,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     translatedText = combinedTranslated,
                     inPlaceBlocks = inPlaceBlocks,
                     latencyMs = latency,
-                    errorMessage = null
+                    errorMessage = null,
+                    resultEngineMode = effectiveConfig.engineMode
                 )
             } catch (e: CancellationException) {
                 if (!sceneBitmap.isRecycled) sceneBitmap.recycle()

@@ -283,4 +283,24 @@ class ModelCatalogAndDataStoreTest {
         config = store.configFlow.first()
         assertEquals(com.example.model.TranslationEngineMode.BAIDU_FREE, config.engineMode)
     }
+
+    @Test
+    fun `google translate response parser concatenates all JSONArray(0) segments and preserves Turkish UTF-8`() {
+        val sampleJson = """
+            [
+              [
+                ["İş adamı şimdi biraz dinlendi. ", "The businessman rested a bit now.", null, null, 1],
+                ["Sabah erkenden güneş doğarken yola çıktı! ", "He set off early at sunrise!", null, null, 1],
+                ["Şehirde ğüşıöçĞÜŞİÖÇ sesleri yankılandı.", "Sounds echoed across the city.", null, null, 1]
+              ],
+              null,
+              "en"
+            ]
+        """.trimIndent()
+
+        val parsed = com.example.engine.FreeWebTranslationProvider.parseGoogleResponse(sampleJson)
+        assertTrue(parsed.contains("İş adamı şimdi biraz dinlendi."))
+        assertTrue(parsed.contains("Sabah erkenden güneş doğarken yola çıktı!"))
+        assertTrue(parsed.contains("Şehirde ğüşıöçĞÜŞİÖÇ sesleri yankılandı."))
+    }
 }
