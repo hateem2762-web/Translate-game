@@ -133,13 +133,24 @@ object OcrTextPreprocessor {
         return text
     }
 
-    fun joinParagraphLines(lines: List<String>): String {
+    fun joinParagraphLines(lines: List<String>, isChinese: Boolean = false): String {
         if (lines.isEmpty()) return ""
-        val cleaned = lines.map { clean(it, isChinese = false) }.filter { it.isNotBlank() }
+        val cleaned = lines.map { clean(it, isChinese) }.filter { it.isNotBlank() }
         if (cleaned.isEmpty()) return ""
-        return cleaned.joinToString(separator = " ")
-            .replace(MULTI_WHITESPACE, " ")
-            .trim()
+        val sb = StringBuilder()
+        for (i in cleaned.indices) {
+            val line = cleaned[i]
+            sb.append(line)
+            if (i < cleaned.size - 1) {
+                val endsWithPunct = line.matches(Regex(".*[.!\\?。！？]$"))
+                if (!endsWithPunct) {
+                    if (!isChinese) sb.append(" ")
+                } else {
+                    sb.append(" ")
+                }
+            }
+        }
+        return sb.toString().replace(MULTI_WHITESPACE, " ").trim()
     }
 
     fun joinChineseBlocks(blocks: List<String>): String {

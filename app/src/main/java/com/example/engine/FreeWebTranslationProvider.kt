@@ -79,17 +79,23 @@ class FreeWebTranslationProvider(
 
         val url = when (engine) {
             WebEngine.GOOGLE ->
-                "https://translate.googleapis.com/translate_a/single?client=gtx&sl=$sl&tl=$tl&dt=t&q=$encoded"
+                "https://translate.googleapis.com/translate_a/single?client=gtx&sl=$sl&tl=$tl&hl=tr&dt=t&q=$encoded"
             WebEngine.BING, WebEngine.BAIDU ->
                 "https://api.mymemory.translated.net/get?q=$encoded&langpair=$sl|$tl"
         }
 
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(url)
             .get()
-            .build()
 
-        client.newCall(request).execute().use { response ->
+        if (engine == WebEngine.GOOGLE) {
+            requestBuilder.addHeader(
+                "User-Agent",
+                "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36"
+            )
+        }
+
+        client.newCall(requestBuilder.build()).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw IOException("HTTP ${response.code}")
@@ -108,10 +114,13 @@ class FreeWebTranslationProvider(
         for (i in 0 until sentences.length()) {
             val item = sentences.optJSONArray(i)
             if (item != null) {
-                sb.append(item.optString(0))
+                val part = item.optString(0)
+                if (part.isNotBlank()) {
+                    sb.append(part)
+                }
             }
         }
-        return sb.toString().trim()
+        return naturalizeTranslation(sb.toString())
     }
 
     private fun parseMyMemoryResponse(rawJson: String): String {
@@ -121,7 +130,21 @@ class FreeWebTranslationProvider(
         if (translated.isBlank() || translated.contains("MYMEMORY WARNING", ignoreCase = true)) {
             throw IOException("Geçersiz veya boş web çeviri yanıtı.")
         }
-        return translated
+        return naturalizeTranslation(translated)
+    }
+
+    private fun naturalizeTranslation(raw: String): String {
+        if (raw.isBlank()) return ""
+        var text = raw.replace(Regex("\\s+"), " ")
+            .replace(Regex("\\s+([,._!?;:])"), "$1")
+            .trim()
+        if (text.isNotEmpty()) {
+            val firstChar = text.first()
+            if (firstChar.isLowerCase() && firstChar.isLetter()) {
+                text = text.replaceFirstChar { it.uppercaseChar() }
+            }
+        }
+        return text
     }
 
     private fun mapLangCode(mlKitCode: String, engine: WebEngine): String {
