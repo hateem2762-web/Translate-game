@@ -112,4 +112,74 @@ class ModelCatalogAndDataStoreTest {
         assertEquals("gpt-oss-120b", config.modelFor(AiProviderPreset.CEREBRAS))
         assertEquals("gemini-2.5-flash", config.modelFor(AiProviderPreset.GEMINI))
     }
+
+    @Test
+    fun `processFrame clears In-Place Blur when static blank frames follow translated subtitle`(): Unit = runBlocking {
+        val subtitleBitmap = android.graphics.Bitmap.createBitmap(120, 40, android.graphics.Bitmap.Config.ARGB_8888)
+        subtitleBitmap.eraseColor(android.graphics.Color.WHITE)
+        val blankBitmap = android.graphics.Bitmap.createBitmap(120, 40, android.graphics.Bitmap.Config.ARGB_8888)
+        blankBitmap.eraseColor(android.graphics.Color.BLACK)
+
+        var currentOcr = com.example.engine.OcrResult(
+            fullText = "Hold the gate!",
+            blocks = listOf(com.example.engine.OcrBlock("Hold the gate!", com.example.model.RoiRect(10, 8, 90, 20)))
+        )
+        val fakeOcr = object : com.example.engine.OcrEngine {
+            override suspend fun recognize(bitmap: android.graphics.Bitmap, sourceLangCode: String) = currentOcr
+            override fun close() = Unit
+        }
+        val fakeAi = object : com.example.engine.TranslationProvider {
+            override val mode = com.example.model.TranslationEngineMode.SMART_AI
+            override suspend fun isReady(config: com.example.model.TranslationConfig) = true
+            override suspend fun translate(text: String, config: com.example.model.TranslationConfig) = "Kapıyı tut!"
+            override fun close() = Unit
+        }
+        val emptyCache = object : com.example.data.repository.TranslationCacheStore {
+            override suspend fun get(
+                engineMode: com.example.model.TranslationEngineMode,
+                sourceLang: String,
+                targetLang: String,
+                normalizedSource: String
+            ): String? = null
+            override suspend fun put(
+                engineMode: com.example.model.TranslationEngineMode,
+                sourceLang: String,
+                targetLang: String,
+                normalizedSource: String,
+                translated: String
+            ) = Unit
+            override suspend fun clear() = Unit
+        }
+
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        val pipeline = com.example.engine.SubtitlePipeline(
+            scope = scope,
+            ocrEngine = fakeOcr,
+            providers = mapOf(com.example.model.TranslationEngineMode.SMART_AI to fakeAi),
+            cacheStore = emptyCache
+        )
+        val cfg = com.example.model.TranslationConfig(
+            debounceMs = 50L,
+            displayMode = com.example.model.DisplayMode.IN_PLACE_BLUR,
+            engineMode = com.example.model.TranslationEngineMode.SMART_AI
+        )
+
+        pipeline.processFrame(subtitleBitmap, cfg)
+        kotlinx.coroutines.delay(140L)
+        assertEquals("Kapıyı tut!", pipeline.output.value.translatedText)
+        assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+
+        // Dialogue disappears -> 2 identical black frames follow (RoiFrameDiffer would return false on frame #2 without bypassDiffer)
+        currentOcr = com.example.engine.OcrResult("", emptyList())
+        pipeline.processFrame(blankBitmap, cfg)
+        assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+        assertTrue(pipeline.isAwaitingBlankClear())
+
+        pipeline.processFrame(blankBitmap, cfg)
+        assertTrue(pipeline.output.value.inPlaceBlocks.isEmpty())
+        assertEquals("", pipeline.output.value.translatedText)
+        assertFalse(pipeline.isAwaitingBlankClear())
+
+        scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
 }

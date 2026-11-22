@@ -6,6 +6,7 @@ import android.os.Build
 import android.view.Gravity
 import android.view.WindowManager
 import com.example.capture.ScreenMetricsHelper
+import com.example.model.AiProviderPreset
 import com.example.model.DisplayMode
 import com.example.model.RoiRect
 import com.example.model.SubtitleEntry
@@ -15,8 +16,8 @@ import kotlin.math.roundToInt
 
 /**
  * Coordinates the ROI selector window (and its In-Place render layer), the floating HUD window
- * (resizable & persisted Classic Box OR compact In-Place floating circular button), and the
- * floating Dialogue History popup window.
+ * (resizable & persisted Classic Box OR compact In-Place floating circular button), the
+ * floating Dialogue History popup, and the floating AI Model Picker popup.
  */
 class OverlayController(
     private val context: Context,
@@ -24,6 +25,10 @@ class OverlayController(
     private val onClassicBoxLayoutChanged: (x: Int, y: Int, widthDp: Int, heightDp: Int) -> Unit,
     private val onToggleDisplayMode: () -> Unit,
     private val onToggleEngineMode: () -> Unit,
+    private val onOpenModelPicker: () -> Unit,
+    private val onSelectAiPresetFromOverlay: (AiProviderPreset) -> Unit,
+    private val onSelectAiModelFromOverlay: (AiProviderPreset, String) -> Unit,
+    private val onRefreshModelsFromOverlay: (AiProviderPreset) -> Unit,
     private val onTogglePause: () -> Unit,
     private val onToggleLockRoi: () -> Unit,
     private val onOpenHistory: () -> Unit,
@@ -40,6 +45,7 @@ class OverlayController(
     private var hudParams: WindowManager.LayoutParams? = null
 
     private var historyView: DialogueHistoryOverlayView? = null
+    private var modelPickerView: ModelPickerOverlayView? = null
 
     private var currentRoi: RoiRect = RoiRect.defaultForScreen(1080, 1920)
     private var currentDisplayMode: DisplayMode? = null
@@ -103,6 +109,7 @@ class OverlayController(
             onClassicResizeFinished = { commitClassicBoxLayoutIfActive() },
             onToggleDisplayMode = onToggleDisplayMode,
             onToggleEngineMode = onToggleEngineMode,
+            onOpenModelPicker = onOpenModelPicker,
             onTogglePause = onTogglePause,
             onToggleLockRoi = onToggleLockRoi,
             onOpenHistory = onOpenHistory,
@@ -171,10 +178,15 @@ class OverlayController(
         roiView?.setInPlaceStealth(hidden)
     }
 
-    fun isHistoryVisible(): Boolean = historyView != null
+    suspend fun hideInPlaceAndAwaitCommitNs(): Long {
+        return roiView?.awaitHiddenCommittedNs() ?: System.nanoTime()
+    }
+
+    fun isHistoryVisible(): Boolean = historyView != null || modelPickerView != null
 
     fun showHistory(entries: List<SubtitleEntry>) {
         if (!isShown) return
+        hideModelPicker()
         val existing = historyView
         if (existing != null) {
             existing.renderEntries(entries, scrollToLatest = true)
@@ -213,6 +225,72 @@ class OverlayController(
             if (it.isAttachedToWindow) windowManager.removeViewImmediate(it)
         }
         historyView = null
+    }
+
+    fun showModelPicker(telemetry: TranslatorTelemetry) {
+        if (!isShown) return
+        hideHistory()
+        val existing = modelPickerView
+        if (existing != null) {
+            existing.render(
+                preset = telemetry.aiPreset,
+                modelId = telemetry.aiModelName,
+                configured = telemetry.configuredPresets,
+                catalogByPreset = telemetry.availableModelsByPreset
+            )
+            return
+        }
+
+        val picker = ModelPickerOverlayView(
+            context = context,
+            onSelectPreset = onSelectAiPresetFromOverlay,
+            onSelectModel = onSelectAiModelFromOverlay,
+            onRefreshModels = onRefreshModelsFromOverlay,
+            onDismiss = { hideModelPicker() }
+        ).apply {
+            render(
+                preset = telemetry.aiPreset,
+                modelId = telemetry.aiModelName,
+                configured = telemetry.configuredPresets,
+                catalogByPreset = telemetry.availableModelsByPreset
+            )
+        }
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            overlayWindowType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+
+        windowManager.addView(picker, params)
+        modelPickerView = picker
+    }
+
+    fun updateModelPickerState(telemetry: TranslatorTelemetry, refreshing: Boolean, note: String?) {
+        modelPickerView?.render(
+            preset = telemetry.aiPreset,
+            modelId = telemetry.aiModelName,
+            configured = telemetry.configuredPresets,
+            catalogByPreset = telemetry.availableModelsByPreset,
+            refreshing = refreshing,
+            note = note
+        )
+    }
+
+    fun hideModelPicker() {
+        modelPickerView?.let {
+            if (it.isAttachedToWindow) windowManager.removeViewImmediate(it)
+        }
+        modelPickerView = null
     }
 
     fun setRoiLocked(locked: Boolean) {
@@ -260,6 +338,12 @@ class OverlayController(
             }
         }
         historyView?.renderEntries(telemetry.recentEntries, scrollToLatest = false)
+        modelPickerView?.render(
+            preset = telemetry.aiPreset,
+            modelId = telemetry.aiModelName,
+            configured = telemetry.configuredPresets,
+            catalogByPreset = telemetry.availableModelsByPreset
+        )
     }
 
     private fun syncHudWindowLayout(mode: DisplayMode) {
@@ -270,7 +354,7 @@ class OverlayController(
             params.width = WindowManager.LayoutParams.WRAP_CONTENT
             params.height = WindowManager.LayoutParams.WRAP_CONTENT
             val fabEdgeMargin = dp(12f)
-            val approxWidth = if (view.isCornerMenuOpen()) dp(330f) else dp(52f)
+            val approxWidth = if (view.isCornerMenuOpen()) dp(380f) else dp(52f)
             params.x = (bounds.width - approxWidth - fabEdgeMargin).coerceAtLeast(fabEdgeMargin)
             params.y = params.y.coerceIn(dp(36f), (bounds.height - dp(96f)).coerceAtLeast(dp(36f)))
         } else {
@@ -368,6 +452,7 @@ class OverlayController(
     fun hide() {
         if (!isShown) return
         hideHistory()
+        hideModelPicker()
         roiView?.let {
             if (it.isAttachedToWindow) windowManager.removeViewImmediate(it)
         }

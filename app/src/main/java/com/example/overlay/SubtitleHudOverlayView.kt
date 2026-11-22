@@ -43,6 +43,7 @@ class SubtitleHudOverlayView(
     private val onClassicResizeFinished: () -> Unit = {},
     private val onToggleDisplayMode: () -> Unit,
     private val onToggleEngineMode: () -> Unit,
+    private val onOpenModelPicker: () -> Unit = {},
     private val onTogglePause: () -> Unit,
     private val onToggleLockRoi: () -> Unit,
     private val onOpenHistory: () -> Unit = {},
@@ -62,10 +63,12 @@ class SubtitleHudOverlayView(
     private val statusLabel: TextView
     private val classicModeChip: TextView
     private val classicEngineChip: TextView
+    private val classicModelChip: TextView
     private val classicHistoryButton: ImageButton
     private val classicPauseButton: ImageButton
     private val classicLockButton: ImageButton
     private val classicStopButton: ImageButton
+    private val classicStealthButton: ImageButton
     private val textScrollView: ScrollView
     private val translatedTextView: OutlinedSubtitleTextView
     private val originalTextView: OutlinedSubtitleTextView
@@ -77,6 +80,7 @@ class SubtitleHudOverlayView(
     private val cornerMenuBg: GradientDrawable
     private val cornerModeChip: TextView
     private val cornerEngineChip: TextView
+    private val cornerModelChip: TextView
     private val cornerHistoryButton: ImageButton
     private val cornerPauseButton: ImageButton
     private val cornerLockButton: ImageButton
@@ -90,6 +94,8 @@ class SubtitleHudOverlayView(
     private val cornerFabStatusDot: View
 
     private var isCornerMenuExpanded: Boolean = false
+    private var isClassicBoxStealth: Boolean = false
+    private var lastClassicBoxOpacity: Float = 0.86f
     private var currentDisplayMode: DisplayMode = DisplayMode.CLASSIC_BOX
 
     init {
@@ -139,31 +145,49 @@ class SubtitleHudOverlayView(
 
         classicModeChip = createToggleChip(monoFont) { onToggleDisplayMode() }
         classicEngineChip = createToggleChip(monoFont) { onToggleEngineMode() }
+        classicModelChip = createToggleChip(monoFont) { onOpenModelPicker() }.apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            maxWidth = dp(78f)
+            contentDescription = "AI modelini seç"
+        }
 
-        headerRow.addView(classicModeChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(28f)).apply {
-            marginEnd = dp(4f)
+        headerRow.addView(classicModeChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(26f)).apply {
+            marginEnd = dp(3f)
         })
-        headerRow.addView(classicEngineChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(28f)).apply {
+        headerRow.addView(classicEngineChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(26f)).apply {
+            marginEnd = dp(3f)
+        })
+        headerRow.addView(classicModelChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(26f)).apply {
             marginEnd = dp(2f)
         })
 
-        classicHistoryButton = createHudButton(R.drawable.ic_hud_history, "Diyalog geçmişini aç") {
+        classicHistoryButton = createHudButton(R.drawable.ic_hud_history, "Diyalog geçmişini aç", sizeDp = 28f) {
             onOpenHistory()
         }
-        classicPauseButton = createHudButton(R.drawable.ic_hud_pause, "Duraklat veya devam et") {
+        classicPauseButton = createHudButton(R.drawable.ic_hud_pause, "Duraklat veya devam et", sizeDp = 28f) {
             onTogglePause()
         }
-        classicLockButton = createHudButton(R.drawable.ic_hud_unlock, "Bölgeyi kilitle veya düzenle") {
+        classicLockButton = createHudButton(R.drawable.ic_hud_unlock, "Bölgeyi kilitle veya düzenle", sizeDp = 28f) {
             onToggleLockRoi()
         }
-        classicStopButton = createHudButton(R.drawable.ic_hud_close, "Çeviriyi durdur") {
+        classicStopButton = createHudButton(R.drawable.ic_hud_close, "Çeviriyi durdur", sizeDp = 28f) {
             onStopService()
+        }
+        classicStealthButton = createHudButton(
+            R.drawable.ic_hud_visibility,
+            "Kutu arayüzünü gizle veya göster",
+            sizeDp = 30f
+        ) {
+            isClassicBoxStealth = !isClassicBoxStealth
+            applyClassicStealthVisibility()
         }
 
         headerRow.addView(classicHistoryButton)
         headerRow.addView(classicPauseButton)
         headerRow.addView(classicLockButton)
         headerRow.addView(classicStopButton)
+        headerRow.addView(classicStealthButton)
 
         classicContainer.addView(
             headerRow,
@@ -268,6 +292,15 @@ class SubtitleHudOverlayView(
 
         cornerModeChip = createToggleChip(monoFont) { onToggleDisplayMode() }
         cornerEngineChip = createToggleChip(monoFont) { onToggleEngineMode() }
+        cornerModelChip = createToggleChip(monoFont) {
+            collapseCornerMenu()
+            onOpenModelPicker()
+        }.apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            maxWidth = dp(82f)
+            contentDescription = "AI modelini seç"
+        }
         cornerHistoryButton = createHudButton(R.drawable.ic_hud_history, "Diyalog geçmişini aç") {
             collapseCornerMenu()
             onOpenHistory()
@@ -287,9 +320,12 @@ class SubtitleHudOverlayView(
         }
 
         cornerMenuPill.addView(cornerModeChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30f)).apply {
-            marginEnd = dp(4f)
+            marginEnd = dp(3f)
         })
         cornerMenuPill.addView(cornerEngineChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30f)).apply {
+            marginEnd = dp(3f)
+        })
+        cornerMenuPill.addView(cornerModelChip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30f)).apply {
             marginEnd = dp(2f)
         })
         cornerMenuPill.addView(cornerHistoryButton)
@@ -379,12 +415,56 @@ class SubtitleHudOverlayView(
      */
     fun updateClassicBoxOpacity(opacity: Float) {
         val clamped = opacity.coerceIn(0f, 1f)
-        val bgAlpha = (clamped * 255f).toInt().coerceIn(0, 255)
-        val borderAlpha = (clamped * 0.42f * 255f).toInt().coerceIn(0, 255)
-        classicBgDrawable.setColor(Color.argb(bgAlpha, 9, 14, 23))
-        classicBgDrawable.setStroke(dp(1f), Color.argb(borderAlpha, 34, 211, 238))
+        lastClassicBoxOpacity = clamped
+        if (isClassicBoxStealth) {
+            classicBgDrawable.setColor(Color.TRANSPARENT)
+            classicBgDrawable.setStroke(0, Color.TRANSPARENT)
+        } else {
+            val bgAlpha = (clamped * 255f).toInt().coerceIn(0, 255)
+            val borderAlpha = (clamped * 0.42f * 255f).toInt().coerceIn(0, 255)
+            classicBgDrawable.setColor(Color.argb(bgAlpha, 9, 14, 23))
+            classicBgDrawable.setStroke(dp(1f), Color.argb(borderAlpha, 34, 211, 238))
+        }
         translatedTextView.alpha = 1f
         originalTextView.alpha = 1f
+    }
+
+    private fun applyClassicStealthVisibility() {
+        val stealth = isClassicBoxStealth
+        val chromeVis = if (stealth) View.INVISIBLE else View.VISIBLE
+        val interactive = !stealth
+
+        statusDot.visibility = chromeVis
+        statusLabel.visibility = chromeVis
+
+        listOf(classicModeChip, classicEngineChip, classicModelChip).forEach { chip ->
+            chip.visibility = chromeVis
+            chip.isClickable = interactive
+            chip.isEnabled = interactive
+        }
+        listOf(classicHistoryButton, classicPauseButton, classicLockButton, classicStopButton).forEach { btn ->
+            btn.visibility = chromeVis
+            btn.isClickable = interactive
+            btn.isEnabled = interactive
+        }
+        classicResizeGrip.visibility = chromeVis
+        classicResizeGrip.isEnabled = interactive
+
+        if (stealth) {
+            originalTextView.visibility = View.GONE
+            classicStealthButton.setImageResource(R.drawable.ic_hud_visibility_off)
+            classicStealthButton.setColorFilter(Color.parseColor("#E2E8F0"))
+            classicStealthButton.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.argb(115, 9, 14, 23))
+                setStroke(dp(1f), Color.argb(120, 148, 163, 184))
+            }
+        } else {
+            classicStealthButton.setImageResource(R.drawable.ic_hud_visibility)
+            classicStealthButton.setColorFilter(Color.parseColor("#E2E8F0"))
+            classicStealthButton.setBackgroundColor(Color.TRANSPARENT)
+        }
+        updateClassicBoxOpacity(lastClassicBoxOpacity)
     }
 
     fun isCornerMenuOpen(): Boolean = isCornerMenuExpanded
@@ -419,7 +499,6 @@ class SubtitleHudOverlayView(
         val engineAccentHex = when (telemetry.engineMode) {
             TranslationEngineMode.HYBRID -> "#A78BFA"
             TranslationEngineMode.SMART_AI -> "#F59E0B"
-            TranslationEngineMode.LIBRETRANSLATE -> "#34D399"
             TranslationEngineMode.OFFLINE_LOCAL -> "#22D3EE"
         }
         val engineHighlighted = telemetry.engineMode != TranslationEngineMode.OFFLINE_LOCAL
@@ -450,6 +529,12 @@ class SubtitleHudOverlayView(
         styleChip(classicEngineChip, highlighted = engineHighlighted, highlightColor = engineAccentHex)
         styleChip(cornerEngineChip, highlighted = engineHighlighted, highlightColor = engineAccentHex)
 
+        val shortModel = compactModelLabel(telemetry.aiModelName)
+        classicModelChip.text = shortModel
+        cornerModelChip.text = shortModel
+        styleChip(classicModelChip, highlighted = engineHighlighted, highlightColor = "#F59E0B")
+        styleChip(cornerModelChip, highlighted = engineHighlighted, highlightColor = "#F59E0B")
+
         val pauseRes = if (telemetry.status == ServiceStatus.PAUSED) R.drawable.ic_hud_play else R.drawable.ic_hud_pause
         val lockRes = if (telemetry.isRoiLocked) R.drawable.ic_hud_lock else R.drawable.ic_hud_unlock
         classicPauseButton.setImageResource(pauseRes)
@@ -470,7 +555,7 @@ class SubtitleHudOverlayView(
                 cornerErrorBanner.visibility = View.GONE
             }
         } else {
-            updateClassicBoxOpacity(telemetry.classicBoxOpacity)
+            applyClassicStealthVisibility()
 
             statusLabel.text = when {
                 telemetry.status == ServiceStatus.PAUSED -> "DURAKLAT"
@@ -497,7 +582,7 @@ class SubtitleHudOverlayView(
                 textScrollView.scrollTo(0, 0)
             }
 
-            if (showOriginal && telemetry.currentSourceText.isNotBlank()) {
+            if (!isClassicBoxStealth && showOriginal && telemetry.currentSourceText.isNotBlank()) {
                 originalTextView.visibility = View.VISIBLE
                 originalTextView.setTextSize(
                     TypedValue.COMPLEX_UNIT_SP,
@@ -510,12 +595,22 @@ class SubtitleHudOverlayView(
         }
     }
 
+    private fun compactModelLabel(modelId: String): String {
+        val tail = modelId.substringAfterLast('/').removeSuffix(":free")
+        return when {
+            tail.equals("gemini-2.5-flash-lite", ignoreCase = true) -> "2.5-lite"
+            tail.equals("gemini-2.5-flash", ignoreCase = true) -> "2.5-flash"
+            tail.length > 13 -> tail.take(12) + "…"
+            else -> tail.ifBlank { "Model" }
+        }
+    }
+
     private fun createToggleChip(font: android.graphics.Typeface?, onClick: () -> Unit): TextView {
         return TextView(context).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             typeface = font
             gravity = Gravity.CENTER
-            setPadding(dp(8f), dp(2f), dp(8f), dp(2f))
+            setPadding(dp(6f), dp(2f), dp(6f), dp(2f))
             setOnClickListener { onClick() }
         }
     }
@@ -533,15 +628,20 @@ class SubtitleHudOverlayView(
         }
     }
 
-    private fun createHudButton(iconRes: Int, contentDesc: String, onClick: () -> Unit): ImageButton {
-        val size = dp(32f)
+    private fun createHudButton(
+        iconRes: Int,
+        contentDesc: String,
+        sizeDp: Float = 32f,
+        onClick: () -> Unit
+    ): ImageButton {
+        val size = dp(sizeDp)
         return ImageButton(context).apply {
             setImageResource(iconRes)
             contentDescription = contentDesc
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setColorFilter(Color.parseColor("#E2E8F0"))
             setBackgroundColor(Color.TRANSPARENT)
-            setPadding(dp(5f), dp(5f), dp(5f), dp(5f))
+            setPadding(dp(4.5f), dp(4.5f), dp(4.5f), dp(4.5f))
             layoutParams = LinearLayout.LayoutParams(size, size)
             setOnClickListener { onClick() }
         }

@@ -10,8 +10,7 @@ enum class DisplayMode(val shortLabelTr: String) {
 enum class TranslationEngineMode(val shortLabelTr: String) {
     OFFLINE_LOCAL("Yerel"),
     HYBRID("Hibrit"),
-    SMART_AI("AI"),
-    LIBRETRANSLATE("Libre")
+    SMART_AI("AI")
 }
 
 data class AiModelOption(
@@ -179,10 +178,7 @@ data class TranslationConfig(
     val aiEndpointUrl: String = aiPreset.defaultBaseUrl,
     val aiModelName: String = aiPreset.defaultModel,
     val aiModelsByPreset: Map<AiProviderPreset, String> = emptyMap(),
-    val aiEndpointsByPreset: Map<AiProviderPreset, String> = emptyMap(),
-    // LibreTranslate (self-hosted or hosted instance). API key is optional for self-hosted servers.
-    val libreEndpointUrl: String = DEFAULT_LIBRE_ENDPOINT,
-    val libreApiKey: String = ""
+    val aiEndpointsByPreset: Map<AiProviderPreset, String> = emptyMap()
 ) {
     fun apiKeyFor(preset: AiProviderPreset): String {
         return aiApiKeys[preset] ?: if (preset == aiPreset) aiApiKey else ""
@@ -196,9 +192,5 @@ data class TranslationConfig(
     fun endpointFor(preset: AiProviderPreset): String {
         return aiEndpointsByPreset[preset]?.takeIf { it.isNotBlank() }
             ?: if (preset == aiPreset && aiEndpointUrl.isNotBlank()) aiEndpointUrl else preset.defaultBaseUrl
-    }
-
-    companion object {
-        const val DEFAULT_LIBRE_ENDPOINT = "https://libretranslate.com"
     }
 }

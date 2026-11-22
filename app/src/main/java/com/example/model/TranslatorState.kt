@@ -61,5 +61,9 @@ data class TranslatorTelemetry(
     val framesSkippedSameText: Long = 0L,
     val cacheHits: Long = 0L,
     val errorMessage: String? = null,
-    val recentEntries: List<SubtitleEntry> = emptyList()
+    val recentEntries: List<SubtitleEntry> = emptyList(),
+    val aiPreset: AiProviderPreset = AiProviderPreset.GROQ,
+    val aiModelName: String = AiProviderPreset.GROQ.defaultModel,
+    val configuredPresets: Set<AiProviderPreset> = emptySet(),
+    val availableModelsByPreset: Map<AiProviderPreset, List<AiModelOption>> = emptyMap()
 )

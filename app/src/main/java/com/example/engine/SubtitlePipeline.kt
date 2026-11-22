@@ -101,7 +101,10 @@ class SubtitlePipeline(
     suspend fun processFrame(bitmap: Bitmap, config: TranslationConfig) {
         val current = _output.value
 
-        if (!frameDiffer.hasVisualChange(bitmap)) {
+        val bypassDiffer = consecutiveBlankFrames > 0 ||
+            current.isStabilizing ||
+            pendingCandidate.isNotEmpty()
+        if (!bypassDiffer && !frameDiffer.hasVisualChange(bitmap)) {
             _output.value = current.copy(framesSkipped = current.framesSkipped + 1)
             return
         }
@@ -130,7 +133,7 @@ class SubtitlePipeline(
         val normalized = normalizeText(ocrResult.fullText, isChinese)
         val current = _output.value
 
-        val blankClearThreshold = if (config.displayMode == DisplayMode.IN_PLACE_BLUR) 4 else 2
+        val blankClearThreshold = 2
         if (normalized.isBlank()) {
             val hasActiveContent = current.inPlaceBlocks.isNotEmpty() ||
                 current.translatedText.isNotBlank() ||
@@ -181,6 +184,7 @@ class SubtitlePipeline(
 
         // Self-OCR loop guard: in In-Place mode, never re-translate our own rendered overlay text
         if (config.displayMode == DisplayMode.IN_PLACE_BLUR && isSelfGeneratedOverlayText(normalized)) {
+            frameDiffer.reset()
             _output.value = current.copy(
                 framesProcessed = current.framesProcessed + 1,
                 framesSkipped = current.framesSkipped + 1,

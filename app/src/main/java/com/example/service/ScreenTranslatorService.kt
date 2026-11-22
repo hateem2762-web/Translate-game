@@ -22,12 +22,12 @@ import com.example.capture.ScreenMetricsHelper
 import com.example.data.local.SubLensDatabase
 import com.example.data.preferences.SettingsDataStore
 import com.example.data.repository.TranslationCacheRepository
-import com.example.engine.LibreTranslateProvider
 import com.example.engine.MlKitOcrEngine
 import com.example.engine.MlKitTranslatorEngine
 import com.example.engine.OfflineMlKitTranslationProvider
 import com.example.engine.SmartAiTranslationProvider
 import com.example.engine.SubtitlePipeline
+import com.example.model.AiProviderPreset
 import com.example.model.DisplayMode
 import com.example.model.ServiceStatus
 import com.example.model.TranslationConfig
@@ -53,7 +53,6 @@ class ScreenTranslatorService : Service() {
     private lateinit var ocrEngine: MlKitOcrEngine
     private lateinit var offlineProvider: OfflineMlKitTranslationProvider
     private lateinit var smartAiProvider: SmartAiTranslationProvider
-    private lateinit var libreProvider: LibreTranslateProvider
     private lateinit var pipeline: SubtitlePipeline
     private lateinit var captureManager: ScreenCaptureManager
     private lateinit var overlayController: OverlayController
@@ -72,15 +71,13 @@ class ScreenTranslatorService : Service() {
         ocrEngine = MlKitOcrEngine()
         offlineProvider = OfflineMlKitTranslationProvider(MlKitTranslatorEngine())
         smartAiProvider = SmartAiTranslationProvider(applicationContext)
-        libreProvider = LibreTranslateProvider()
 
         pipeline = SubtitlePipeline(
             scope = serviceScope,
             ocrEngine = ocrEngine,
             providers = mapOf(
                 TranslationEngineMode.OFFLINE_LOCAL to offlineProvider,
-                TranslationEngineMode.SMART_AI to smartAiProvider,
-                TranslationEngineMode.LIBRETRANSLATE to libreProvider
+                TranslationEngineMode.SMART_AI to smartAiProvider
             ),
             cacheStore = cacheRepository
         )
@@ -108,6 +105,24 @@ class ScreenTranslatorService : Service() {
             },
             onToggleDisplayMode = { toggleDisplayMode() },
             onToggleEngineMode = { toggleEngineMode() },
+            onOpenModelPicker = {
+                overlayController.showModelPicker(ServiceStateHolder.telemetry.value)
+            },
+            onSelectAiPresetFromOverlay = { preset ->
+                serviceScope.launch(Dispatchers.IO) {
+                    settingsStore.updateAiPreset(preset)
+                }
+            },
+            onSelectAiModelFromOverlay = { preset, modelId ->
+                pipeline.reset()
+                serviceScope.launch(Dispatchers.IO) {
+                    settingsStore.updateAiPreset(preset)
+                    settingsStore.updateAiModelName(preset, modelId)
+                }
+            },
+            onRefreshModelsFromOverlay = { preset ->
+                refreshModelsInsideOverlay(preset)
+            },
             onTogglePause = { togglePause() },
             onToggleLockRoi = { toggleRoiLock() },
             onOpenHistory = {
@@ -126,12 +141,18 @@ class ScreenTranslatorService : Service() {
     private fun observeConfigAndPipeline() {
         serviceScope.launch {
             settingsStore.configFlow.collect { config ->
+                val presetOrModelChanged = config.aiPreset != currentConfig.aiPreset ||
+                    config.aiModelName != currentConfig.aiModelName ||
+                    config.aiApiKey != currentConfig.aiApiKey
                 val modeOrEngineChanged = config.displayMode != currentConfig.displayMode ||
                     config.engineMode != currentConfig.engineMode
                 currentConfig = config
-                if (modeOrEngineChanged) {
+                if (modeOrEngineChanged || presetOrModelChanged) {
                     pipeline.reset()
                 }
+                val configured = AiProviderPreset.entries.filter { p ->
+                    config.apiKeyFor(p).isNotBlank()
+                }.toSet()
                 ServiceStateHolder.update {
                     it.copy(
                         displayMode = config.displayMode,
@@ -146,7 +167,10 @@ class ScreenTranslatorService : Service() {
                         classicBoxHeightDp = config.classicBoxHeightDp,
                         classicBoxX = config.classicBoxX,
                         classicBoxY = config.classicBoxY,
-                        classicBoxOpacity = config.classicBoxOpacity
+                        classicBoxOpacity = config.classicBoxOpacity,
+                        aiPreset = config.aiPreset,
+                        aiModelName = config.aiModelName,
+                        configuredPresets = configured
                     )
                 }
                 overlayController.updateHud(
@@ -161,6 +185,9 @@ class ScreenTranslatorService : Service() {
                 out.lastCompletedEntry?.let { entry ->
                     ServiceStateHolder.pushCompletedEntry(entry)
                 }
+                val configured = AiProviderPreset.entries.filter { p ->
+                    currentConfig.apiKeyFor(p).isNotBlank()
+                }.toSet()
                 ServiceStateHolder.update { prev ->
                     prev.copy(
                         displayMode = currentConfig.displayMode,
@@ -176,6 +203,9 @@ class ScreenTranslatorService : Service() {
                         classicBoxX = currentConfig.classicBoxX,
                         classicBoxY = currentConfig.classicBoxY,
                         classicBoxOpacity = currentConfig.classicBoxOpacity,
+                        aiPreset = currentConfig.aiPreset,
+                        aiModelName = currentConfig.aiModelName,
+                        configuredPresets = configured,
                         currentSourceText = out.sourceText,
                         currentTranslatedText = out.translatedText,
                         inPlaceBlocks = out.inPlaceBlocks,
@@ -253,6 +283,9 @@ class ScreenTranslatorService : Service() {
                 overlayController.show(savedRoi, currentConfig)
                 captureManager.start(resultCode, resultData)
 
+                val configured = AiProviderPreset.entries.filter { p ->
+                    currentConfig.apiKeyFor(p).isNotBlank()
+                }.toSet()
                 ServiceStateHolder.update {
                     it.copy(
                         status = ServiceStatus.RUNNING,
@@ -269,6 +302,9 @@ class ScreenTranslatorService : Service() {
                         classicBoxX = currentConfig.classicBoxX,
                         classicBoxY = currentConfig.classicBoxY,
                         classicBoxOpacity = currentConfig.classicBoxOpacity,
+                        aiPreset = currentConfig.aiPreset,
+                        aiModelName = currentConfig.aiModelName,
+                        configuredPresets = configured,
                         isRoiLocked = false,
                         isAiRefining = false,
                         errorMessage = null
@@ -303,14 +339,16 @@ class ScreenTranslatorService : Service() {
                 if (!isPaused && !overlayController.isHistoryVisible()) {
                     val roi = overlayController.getActiveCaptureRoi()
                     val croppedBitmap = if (isInPlaceWithActiveMask) {
-                        // Drain stale frames, hide In-Place mask (~34ms pulse), capture clean game frame, restore immediately
+                        // Drain stale frames, wait for Choreographer invisible draw commit,
+                        // capture ONLY frames >= minValidTsNs, then restore overlay immediately.
                         captureManager.drainPendingFrame()
-                        overlayController.setInPlaceStealth(true)
+                        val minValidTsNs = overlayController.hideInPlaceAndAwaitCommitNs()
                         try {
                             captureManager.awaitAndCaptureStealthRoi(
                                 roi = roi,
-                                minSettleMs = 34L,
-                                maxWaitMs = 75L
+                                minValidTimestampNs = minValidTsNs,
+                                settleMs = 38L,
+                                maxWaitMs = 110L
                             )
                         } finally {
                             overlayController.setInPlaceStealth(false)
@@ -328,10 +366,44 @@ class ScreenTranslatorService : Service() {
 
                 val loopDelay = when {
                     isInPlaceWithActiveMask && pipeline.isAwaitingBlankClear() -> 120L
-                    isInPlaceWithActiveMask -> maxOf(currentConfig.scanIntervalMs, 420L)
+                    isInPlaceWithActiveMask -> maxOf(currentConfig.scanIntervalMs, 380L)
                     else -> currentConfig.scanIntervalMs.coerceIn(150L, 1200L)
                 }
                 delay(loopDelay)
+            }
+        }
+    }
+
+    private fun refreshModelsInsideOverlay(preset: AiProviderPreset) {
+        val targetConfig = currentConfig.copy(
+            aiPreset = preset,
+            aiEndpointUrl = currentConfig.endpointFor(preset),
+            aiModelName = currentConfig.modelFor(preset),
+            aiApiKey = currentConfig.apiKeyFor(preset)
+        )
+        overlayController.updateModelPickerState(
+            telemetry = ServiceStateHolder.telemetry.value,
+            refreshing = true,
+            note = "${preset.shortLabelTr} modelleri getiriliyor…"
+        )
+        serviceScope.launch {
+            try {
+                val models = smartAiProvider.fetchAvailableModels(targetConfig)
+                val nextMap = ServiceStateHolder.telemetry.value.availableModelsByPreset.toMutableMap().apply {
+                    put(preset, models)
+                }
+                ServiceStateHolder.update { it.copy(availableModelsByPreset = nextMap) }
+                overlayController.updateModelPickerState(
+                    telemetry = ServiceStateHolder.telemetry.value,
+                    refreshing = false,
+                    note = "${models.size} güncel model listelendi."
+                )
+            } catch (e: Exception) {
+                overlayController.updateModelPickerState(
+                    telemetry = ServiceStateHolder.telemetry.value,
+                    refreshing = false,
+                    note = e.localizedMessage ?: "Model listesi getirilemedi."
+                )
             }
         }
     }
@@ -475,7 +547,6 @@ class ScreenTranslatorService : Service() {
         ocrEngine.close()
         offlineProvider.close()
         smartAiProvider.close()
-        libreProvider.close()
         ServiceStateHolder.markStopped()
         serviceScope.cancel()
         super.onDestroy()

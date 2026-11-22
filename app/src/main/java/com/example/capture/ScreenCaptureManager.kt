@@ -140,24 +140,47 @@ class ScreenCaptureManager(
     }
 
     /**
-     * Waits past SurfaceFlinger's hide-overlay composite (~34ms) for a clean frame without the
-     * In-Place blur/text overlay, then acquires the latest frame so any earlier dirty frame is dropped.
+     * Waits past SurfaceFlinger's hide-overlay composite after [minValidTimestampNs] and acquires
+     * ONLY a frame produced after the In-Place layer became invisible. Any older stale frame is
+     * discarded so our own Turkish overlay text never leaks into OCR.
      */
     suspend fun awaitAndCaptureStealthRoi(
         roi: RoiRect,
-        minSettleMs: Long = 34L,
-        maxWaitMs: Long = 75L
+        minValidTimestampNs: Long = 0L,
+        settleMs: Long = 38L,
+        maxWaitMs: Long = 110L
     ): Bitmap? {
-        delay(minSettleMs)
-        val signal = nextFrameSignal
-        if (signal != null && !signal.isCompleted) {
-            val remaining = (maxWaitMs - minSettleMs).coerceAtLeast(10L)
-            withTimeoutOrNull(remaining) {
+        delay(settleMs)
+        val deadlineMs = System.currentTimeMillis() + (maxWaitMs - settleMs).coerceAtLeast(16L)
+
+        while (true) {
+            val reader = imageReader ?: return null
+            val image = reader.acquireLatestImage()
+            if (image != null) {
+                val ts = image.timestamp
+                if (minValidTimestampNs <= 0L || ts <= 0L || ts >= minValidTimestampNs) {
+                    nextFrameSignal = null
+                    return try {
+                        cropPlaneToBitmap(image, roi)
+                    } finally {
+                        image.close()
+                    }
+                }
+                // Stale pre-hide frame containing our own overlay -> discard and wait for next VSync
+                image.close()
+            }
+
+            val remaining = deadlineMs - System.currentTimeMillis()
+            if (remaining <= 0L) {
+                nextFrameSignal = null
+                return null
+            }
+
+            val signal = CompletableDeferred<Unit>().also { nextFrameSignal = it }
+            withTimeoutOrNull(remaining.coerceAtMost(24L)) {
                 signal.await()
             }
         }
-        nextFrameSignal = null
-        return captureCroppedRoi(roi)
     }
 
     /**

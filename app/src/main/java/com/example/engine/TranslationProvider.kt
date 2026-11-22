@@ -338,7 +338,7 @@ class SmartAiTranslationProvider(
                     429 -> {
                         quotaCooldownUntilMs.set(System.currentTimeMillis() + QUOTA_COOLDOWN_MS)
                         throw AiQuotaExceededException(
-                            "Gemini kotası doldu (429). Groq/Cerebras seçin, Hızlı Yerel / LibreTranslate moduna geçin veya bekleyin."
+                            "Gemini kotası doldu (429). Groq/Cerebras seçin, Hızlı Yerel moda geçin veya bekleyin."
                         )
                     }
                     400, 401, 403 -> throw IOException(

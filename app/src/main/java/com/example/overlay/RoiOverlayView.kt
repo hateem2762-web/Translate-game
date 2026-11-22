@@ -9,10 +9,13 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.util.TypedValue
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -22,6 +25,9 @@ import androidx.core.content.res.ResourcesCompat
 import com.example.R
 import com.example.model.InPlaceBlock
 import com.example.model.RoiRect
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 
 /**
  * Draggable & resizable Region of Interest (ROI) viewfinder overlay.
@@ -122,6 +128,32 @@ class RoiOverlayView(
         inPlaceLayer.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
         inPlaceLayer.alpha = if (hidden) 0f else 1f
         inPlaceLayer.invalidate()
+    }
+
+    /**
+     * Hides the In-Place layer and suspends until Android's Choreographer UI traversal
+     * has finished drawing the invisible state, returning the monotonic timestamp (ns).
+     */
+    suspend fun awaitHiddenCommittedNs(): Long {
+        setInPlaceStealth(true)
+        val committed = withTimeoutOrNull(45L) {
+            suspendCancellableCoroutine { cont ->
+                val choreographer = Choreographer.getInstance()
+                val mainHandler = Handler(Looper.getMainLooper())
+                val frameCallback = Choreographer.FrameCallback {
+                    mainHandler.post {
+                        if (cont.isActive) {
+                            cont.resume(System.nanoTime())
+                        }
+                    }
+                }
+                choreographer.postFrameCallback(frameCallback)
+                cont.invokeOnCancellation {
+                    choreographer.removeFrameCallback(frameCallback)
+                }
+            }
+        }
+        return committed ?: System.nanoTime()
     }
 
     /**

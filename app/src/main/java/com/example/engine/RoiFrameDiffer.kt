@@ -9,10 +9,10 @@ import kotlin.math.abs
  * when the cropped ROI region is visually identical to the previous frame.
  */
 class RoiFrameDiffer(
-    private val gridCols: Int = 12,
-    private val gridRows: Int = 6,
-    private val maxAvgLuminanceDelta: Float = 2.0f,
-    private val maxPeakLuminanceDelta: Int = 10
+    private val gridCols: Int = 16,
+    private val gridRows: Int = 8,
+    private val maxAvgLuminanceDelta: Float = 1.2f,
+    private val maxPeakLuminanceDelta: Int = 8
 ) {
     private var previousSample: IntArray? = null
 

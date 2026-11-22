@@ -41,8 +41,6 @@ class MainActivity : ComponentActivity() {
                 val aiApiKeyDraft by viewModel.aiApiKeyDraft.collectAsStateWithLifecycle()
                 val aiModelDraft by viewModel.aiModelDraft.collectAsStateWithLifecycle()
                 val aiEndpointDraft by viewModel.aiEndpointDraft.collectAsStateWithLifecycle()
-                val libreEndpointDraft by viewModel.libreEndpointDraft.collectAsStateWithLifecycle()
-                val libreApiKeyDraft by viewModel.libreApiKeyDraft.collectAsStateWithLifecycle()
                 val lifecycleOwner = LocalLifecycleOwner.current
 
                 DisposableEffect(lifecycleOwner) {
@@ -85,8 +83,6 @@ class MainActivity : ComponentActivity() {
                     aiApiKeyDraft = aiApiKeyDraft,
                     aiModelDraft = aiModelDraft,
                     aiEndpointDraft = aiEndpointDraft,
-                    libreEndpointDraft = libreEndpointDraft,
-                    libreApiKeyDraft = libreApiKeyDraft,
                     onRequestOverlayPermission = {
                         val intent = Intent(
                             Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -124,8 +120,6 @@ class MainActivity : ComponentActivity() {
                     onAiModelChange = { viewModel.onAiModelChanged(it) },
                     onAiEndpointChange = { viewModel.onAiEndpointChanged(it) },
                     onRefreshAiModelsClick = { viewModel.refreshAiModels() },
-                    onLibreEndpointChange = { viewModel.onLibreEndpointChanged(it) },
-                    onLibreApiKeyChange = { viewModel.onLibreApiKeyChanged(it) },
                     onTestAiConnectionClick = { viewModel.testAiConnection() },
                     onSelectSourceLanguage = { viewModel.updateSourceLanguage(it) },
                     onSelectTargetLanguage = { viewModel.updateTargetLanguage(it) },

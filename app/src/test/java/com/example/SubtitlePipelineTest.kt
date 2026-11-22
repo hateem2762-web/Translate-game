@@ -315,7 +315,7 @@ class SubtitlePipelineTest {
     }
 
     @Test
-    fun `in place blur keeps subtitle visible during transient blank frames and clears after 4 blanks`() = runTest {
+    fun `in place blur keeps subtitle visible during 1 transient blank frame and clears after 2nd blank`() = runTest {
         val ai = FakeProvider(TranslationEngineMode.SMART_AI, "TR")
         val pipeline = SubtitlePipeline(
             scope = this,
@@ -334,15 +334,15 @@ class SubtitlePipelineTest {
         runCurrent()
         assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
 
-        // 3 transient blank frames must NOT clear the active In-Place Blur overlay (prevents flicker)
-        repeat(3) {
-            pipeline.processRecognizedResult(simpleResult(""), null, config)
-            assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
-        }
+        // 1st transient blank frame must NOT clear the active In-Place Blur overlay (prevents single-frame flicker)
+        pipeline.processRecognizedResult(simpleResult(""), null, config)
+        assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+        assertTrue(pipeline.isAwaitingBlankClear())
 
-        // 4th consecutive blank frame clears cleanly when dialogue actually ends
+        // 2nd consecutive blank frame clears cleanly when dialogue actually ends
         pipeline.processRecognizedResult(simpleResult(""), null, config)
         assertEquals(0, pipeline.output.value.inPlaceBlocks.size)
+        assertFalse(pipeline.isAwaitingBlankClear())
     }
 
     @Test
@@ -418,48 +418,12 @@ class SubtitlePipelineTest {
     }
 
     @Test
-    fun `libretranslate provider resolves endpoints, maps languages, and routes via pipeline`() = runTest {
-        assertEquals(null, com.example.engine.LibreTranslateProvider.resolveEndpoint("   "))
-        assertEquals(
-            "https://libretranslate.com/translate",
-            com.example.engine.LibreTranslateProvider.resolveEndpoint("libretranslate.com")
-        )
-        assertEquals(
-            "https://libretranslate.com/translate",
-            com.example.engine.LibreTranslateProvider.resolveEndpoint("https://libretranslate.com/")
-        )
-        assertEquals(
-            "http://192.168.1.50:5000/translate",
-            com.example.engine.LibreTranslateProvider.resolveEndpoint("http://192.168.1.50:5000/")
-        )
-
-        assertEquals("en", com.example.engine.LibreTranslateProvider.mapLangCode(TranslateLanguage.ENGLISH))
-        assertEquals("zh", com.example.engine.LibreTranslateProvider.mapLangCode(TranslateLanguage.CHINESE))
-        assertEquals("tr", com.example.engine.LibreTranslateProvider.mapLangCode(TranslateLanguage.TURKISH))
-        assertEquals("pt", com.example.engine.LibreTranslateProvider.mapLangCode(TranslateLanguage.PORTUGUESE))
-
-        val libreFake = FakeProvider(TranslationEngineMode.LIBRETRANSLATE, "LT")
-        val offline = FakeProvider(TranslationEngineMode.OFFLINE_LOCAL, "LOC")
-        val pipeline = SubtitlePipeline(
-            scope = this,
-            ocrEngine = FakeOcrEngine(),
-            providers = mapOf(
-                TranslationEngineMode.OFFLINE_LOCAL to offline,
-                TranslationEngineMode.LIBRETRANSLATE to libreFake
-            ),
-            cacheStore = InMemoryCacheStore()
-        )
-        val libreConfig = TranslationConfig(
-            debounceMs = 150L,
-            engineMode = TranslationEngineMode.LIBRETRANSLATE
-        )
-        pipeline.processRecognizedResult(simpleResult("Defeat the boss"), null, libreConfig)
-        advanceTimeBy(150L)
-        runCurrent()
-
-        assertEquals(1, libreFake.translateCalls)
-        assertEquals(0, offline.translateCalls)
-        assertEquals("LT:Defeat the boss", pipeline.output.value.translatedText)
+    fun `engine modes exclude libretranslate and include only offline hybrid and smart AI`() {
+        val modes = TranslationEngineMode.entries
+        assertEquals(3, modes.size)
+        assertTrue(modes.contains(TranslationEngineMode.OFFLINE_LOCAL))
+        assertTrue(modes.contains(TranslationEngineMode.HYBRID))
+        assertTrue(modes.contains(TranslationEngineMode.SMART_AI))
     }
 
     @Test
@@ -774,10 +738,10 @@ class SubtitlePipelineTest {
         assertEquals(1, ai.calls)
         assertEquals(1L, pipeline.output.value.framesSkipped)
 
-        // Blank frames trigger awaiting-clear state and wipe sourceText + translatedText + inPlaceBlocks at threshold 4
+        // Blank frames trigger awaiting-clear state and wipe sourceText + translatedText + inPlaceBlocks at threshold 2
         pipeline.processRecognizedResult(simpleResult(""), null, config)
         assertTrue(pipeline.isAwaitingBlankClear())
-        repeat(3) { pipeline.processRecognizedResult(simpleResult(""), null, config) }
+        pipeline.processRecognizedResult(simpleResult(""), null, config)
 
         assertFalse(pipeline.isAwaitingBlankClear())
         assertEquals("", pipeline.output.value.sourceText)

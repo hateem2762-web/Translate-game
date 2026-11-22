@@ -16,7 +16,6 @@ import com.example.data.repository.TranslationCacheRepository
 import com.example.engine.BlurMaskHelper
 import com.example.engine.BlurredPatchResult
 import com.example.engine.BoundingBoxStabilizer
-import com.example.engine.LibreTranslateProvider
 import com.example.engine.MlKitOcrEngine
 import com.example.engine.MlKitTranslatorEngine
 import com.example.engine.OfflineMlKitTranslationProvider
@@ -118,7 +117,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val translatorEngine = MlKitTranslatorEngine()
     private val offlineTranslator = OfflineMlKitTranslationProvider(translatorEngine)
     private val smartAiTester = SmartAiTranslationProvider(appContext)
-    private val libreTranslator = LibreTranslateProvider()
     private val sandboxOcrEngine = MlKitOcrEngine()
 
     private val screenBounds = ScreenMetricsHelper.getScreenBounds(appContext)
@@ -144,12 +142,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _aiEndpointDraft = MutableStateFlow(AiProviderPreset.GROQ.defaultBaseUrl)
     val aiEndpointDraft: StateFlow<String> = _aiEndpointDraft.asStateFlow()
-
-    private val _libreEndpointDraft = MutableStateFlow(TranslationConfig.DEFAULT_LIBRE_ENDPOINT)
-    val libreEndpointDraft: StateFlow<String> = _libreEndpointDraft.asStateFlow()
-
-    private val _libreApiKeyDraft = MutableStateFlow("")
-    val libreApiKeyDraft: StateFlow<String> = _libreApiKeyDraft.asStateFlow()
 
     val uiState: StateFlow<MainUiState> = combine(
         permissionState,
@@ -210,8 +202,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _aiApiKeyDraft.value = initialConfig.apiKeyFor(initialConfig.aiPreset)
             _aiModelDraft.value = initialConfig.aiModelName
             _aiEndpointDraft.value = initialConfig.aiEndpointUrl
-            _libreEndpointDraft.value = initialConfig.libreEndpointUrl
-            _libreApiKeyDraft.value = initialConfig.libreApiKey
 
             settingsStore.configFlow.collect { config ->
                 checkModelAvailability(config.sourceLangCode, config.targetLangCode)
@@ -405,6 +395,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     statusMessage = "${models.size} güncel ${preset.shortLabelTr} modeli getirildi.",
                     errorMessage = null
                 )
+                ServiceStateHolder.update { it.copy(availableModelsByPreset = updatedMap) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -416,20 +407,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
-    }
-
-    fun onLibreEndpointChanged(newEndpoint: String) {
-        val sanitized = newEndpoint.trim()
-        _libreEndpointDraft.value = sanitized
-        aiTestStatusState.value = AiTestState.Idle
-        viewModelScope.launch { settingsStore.updateLibreEndpointUrl(sanitized) }
-    }
-
-    fun onLibreApiKeyChanged(newKey: String) {
-        val sanitized = newKey.trim()
-        _libreApiKeyDraft.value = sanitized
-        aiTestStatusState.value = AiTestState.Idle
-        viewModelScope.launch { settingsStore.updateLibreApiKey(sanitized) }
     }
 
     private fun TranslationConfig.withDrafts(): TranslationConfig {
@@ -444,9 +421,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             aiApiKey = activeKey,
             aiApiKeys = mergedKeys,
             aiModelName = AiProviderPreset.sanitizeModelId(preset, _aiModelDraft.value),
-            aiEndpointUrl = _aiEndpointDraft.value.trim().ifEmpty { preset.defaultBaseUrl },
-            libreEndpointUrl = _libreEndpointDraft.value.trim(),
-            libreApiKey = _libreApiKeyDraft.value.trim()
+            aiEndpointUrl = _aiEndpointDraft.value.trim().ifEmpty { preset.defaultBaseUrl }
         )
     }
 
@@ -456,10 +431,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val sample = "Hello hero, ready for battle?"
-                val translated = when (currentConfig.engineMode) {
-                    TranslationEngineMode.LIBRETRANSLATE -> libreTranslator.testConnection(sample, currentConfig)
-                    else -> smartAiTester.testConnection(sample, currentConfig)
-                }
+                val translated = smartAiTester.testConnection(sample, currentConfig)
                 aiTestStatusState.value = AiTestState.Success(translated)
             } catch (e: CancellationException) {
                 throw e
@@ -633,7 +605,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val provider = when (effectiveConfig.engineMode) {
                     TranslationEngineMode.SMART_AI -> smartAiTester
-                    TranslationEngineMode.LIBRETRANSLATE -> libreTranslator
                     TranslationEngineMode.OFFLINE_LOCAL -> offlineTranslator
                     TranslationEngineMode.HYBRID -> smartAiTester
                 }
@@ -708,7 +679,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sandboxOcrEngine.close()
         translatorEngine.close()
         smartAiTester.close()
-        libreTranslator.close()
         super.onCleared()
     }
 }

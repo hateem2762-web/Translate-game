@@ -60,9 +60,6 @@ class SettingsDataStore(private val context: Context) {
         val API_KEY_GEMINI = stringPreferencesKey("api_key_gemini")
         val API_KEY_CUSTOM = stringPreferencesKey("api_key_custom")
 
-        val LIBRE_ENDPOINT_URL = stringPreferencesKey("libre_endpoint_url")
-        val LIBRE_API_KEY = stringPreferencesKey("libre_api_key")
-
         val ROI_X = intPreferencesKey("roi_x")
         val ROI_Y = intPreferencesKey("roi_y")
         val ROI_W = intPreferencesKey("roi_w")
@@ -123,7 +120,7 @@ class SettingsDataStore(private val context: Context) {
 
         val savedEngine = prefs[Keys.ENGINE_MODE] ?: TranslationEngineMode.OFFLINE_LOCAL.name
         val engineMode = when (savedEngine) {
-            "DEEPL", "LIBRE_TRANSLATE" -> TranslationEngineMode.LIBRETRANSLATE
+            "DEEPL", "LIBRE_TRANSLATE", "LIBRETRANSLATE" -> TranslationEngineMode.OFFLINE_LOCAL
             else -> runCatching { TranslationEngineMode.valueOf(savedEngine) }
                 .getOrDefault(TranslationEngineMode.OFFLINE_LOCAL)
         }
@@ -162,9 +159,7 @@ class SettingsDataStore(private val context: Context) {
             aiEndpointUrl = activeEndpoint,
             aiModelName = activeModel,
             aiModelsByPreset = isolatedModels,
-            aiEndpointsByPreset = isolatedEndpoints,
-            libreEndpointUrl = prefs[Keys.LIBRE_ENDPOINT_URL] ?: TranslationConfig.DEFAULT_LIBRE_ENDPOINT,
-            libreApiKey = prefs[Keys.LIBRE_API_KEY] ?: ""
+            aiEndpointsByPreset = isolatedEndpoints
         )
     }
 
@@ -296,14 +291,6 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.modelFor(preset)] = sanitized
             prefs[Keys.AI_MODEL_NAME] = sanitized
         }
-    }
-
-    suspend fun updateLibreEndpointUrl(url: String) {
-        context.dataStore.edit { it[Keys.LIBRE_ENDPOINT_URL] = url }
-    }
-
-    suspend fun updateLibreApiKey(apiKey: String) {
-        context.dataStore.edit { it[Keys.LIBRE_API_KEY] = apiKey }
     }
 
     suspend fun updateSourceLanguage(code: String) {
