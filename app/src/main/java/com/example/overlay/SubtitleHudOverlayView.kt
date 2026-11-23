@@ -24,6 +24,7 @@ import androidx.core.content.res.ResourcesCompat
 import com.example.R
 import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
+import com.example.model.RoiRect
 import com.example.model.ServiceStatus
 import com.example.model.TranslationEngineMode
 import com.example.model.TranslatorTelemetry
@@ -268,7 +269,7 @@ class SubtitleHudOverlayView(
         }
 
         translatedTextView = OutlinedSubtitleTextView(context, outlineWidthDp = 3.2f).apply {
-            text = context.getString(R.string.overlay_waiting_subtitle)
+            text = ""
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             typeface = jakartaFont
@@ -433,6 +434,27 @@ class SubtitleHudOverlayView(
 
     fun hasInPlaceError(): Boolean = inPlaceErrorBanner.visibility == View.VISIBLE
 
+    fun getInPlaceControlsScreenRect(): RoiRect? {
+        if (currentDisplayMode != DisplayMode.IN_PLACE_BLUR ||
+            isInPlaceStealthActive ||
+            visibility != View.VISIBLE ||
+            inPlaceHandleContainer.visibility != View.VISIBLE ||
+            inPlaceHandleContainer.alpha <= 0.01f ||
+            inPlaceControlsRow.width <= 0 ||
+            inPlaceControlsRow.height <= 0
+        ) {
+            return null
+        }
+        val loc = IntArray(2)
+        inPlaceControlsRow.getLocationOnScreen(loc)
+        return RoiRect(
+            x = loc[0],
+            y = loc[1],
+            width = inPlaceControlsRow.width,
+            height = inPlaceControlsRow.height
+        )
+    }
+
     fun setInPlaceStealth(hidden: Boolean) {
         isInPlaceStealthActive = hidden
         if (currentDisplayMode != DisplayMode.IN_PLACE_BLUR) return
@@ -509,11 +531,13 @@ class SubtitleHudOverlayView(
             originalTextView.visibility = View.GONE
             classicStealthButton.setImageResource(R.drawable.ic_hud_visibility_off)
             classicStealthButton.setColorFilter(Color.parseColor("#E2E8F0"))
+            classicStealthButton.alpha = 0.36f
             classicStealthButton.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(Color.argb(115, 9, 14, 23))
-                setStroke(dp(1f), Color.argb(120, 148, 163, 184))
+                setColor(Color.argb(72, 9, 14, 23))
+                setStroke(dp(1f), Color.argb(80, 148, 163, 184))
             }
+            classicStopButton.alpha = 1f
             classicStopButton.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(Color.argb(115, 9, 14, 23))
@@ -522,7 +546,9 @@ class SubtitleHudOverlayView(
         } else {
             classicStealthButton.setImageResource(R.drawable.ic_hud_visibility)
             classicStealthButton.setColorFilter(Color.parseColor("#E2E8F0"))
+            classicStealthButton.alpha = 1f
             classicStealthButton.setBackgroundColor(Color.TRANSPARENT)
+            classicStopButton.alpha = 1f
             classicStopButton.setBackgroundColor(Color.TRANSPARENT)
         }
         updateClassicBoxOpacity(lastClassicBoxOpacity)
@@ -654,7 +680,7 @@ class SubtitleHudOverlayView(
         val nextText = when {
             telemetry.errorMessage != null -> telemetry.errorMessage
             telemetry.currentTranslatedText.isNotBlank() -> telemetry.currentTranslatedText
-            else -> context.getString(R.string.overlay_waiting_subtitle)
+            else -> ""
         }
 
         val boxW = if (classicWrapper.width > 0) {

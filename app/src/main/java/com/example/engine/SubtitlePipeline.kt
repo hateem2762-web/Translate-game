@@ -1,9 +1,12 @@
 package com.example.engine
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import com.example.data.repository.TranslationCacheStore
 import com.example.model.DisplayMode
 import com.example.model.InPlaceBlock
+import com.example.model.RoiRect
 import com.example.model.SubtitleEntry
 import com.example.model.TranslationConfig
 import com.example.model.TranslationEngineMode
@@ -127,7 +130,11 @@ class SubtitlePipeline(
         _output.value = _output.value.copy(framesSkipped = _output.value.framesSkipped + 1)
     }
 
-    suspend fun processFrame(bitmap: Bitmap, config: TranslationConfig) {
+    suspend fun processFrame(
+        bitmap: Bitmap,
+        config: TranslationConfig,
+        ignoreControlsRect: RoiRect? = null
+    ) {
         val current = _output.value
 
         val bypassDiffer = consecutiveBlankFrames > 0 ||
@@ -138,16 +145,25 @@ class SubtitlePipeline(
             return
         }
 
+        val maskedOcrBitmap = if (config.displayMode == DisplayMode.IN_PLACE_BLUR && ignoreControlsRect != null) {
+            createControlMaskedOcrBitmap(bitmap, ignoreControlsRect)
+        } else {
+            null
+        }
         val ocrResult = try {
-            ocrEngine.recognize(bitmap, config.sourceLangCode)
+            ocrEngine.recognize(maskedOcrBitmap ?: bitmap, config.sourceLangCode)
         } catch (e: Exception) {
             _output.value = _output.value.copy(
                 errorMessage = "OCR hatası: ${e.localizedMessage ?: "Bilinmeyen hata"}"
             )
             return
+        } finally {
+            if (maskedOcrBitmap != null && !maskedOcrBitmap.isRecycled) {
+                maskedOcrBitmap.recycle()
+            }
         }
 
-        processRecognizedResult(ocrResult, bitmap, config)
+        processRecognizedResult(ocrResult, bitmap, config, ignoreControlsRect)
     }
 
     /**
@@ -156,10 +172,36 @@ class SubtitlePipeline(
     internal fun processRecognizedResult(
         ocrResult: OcrResult,
         frameBitmap: Bitmap?,
-        config: TranslationConfig
+        config: TranslationConfig,
+        ignoreControlsRect: RoiRect? = null
     ) {
         val isChinese = config.sourceLangCode == TranslateLanguage.CHINESE
-        val normalized = normalizeText(ocrResult.fullText, isChinese)
+        val filteredBlocks = if (config.displayMode == DisplayMode.IN_PLACE_BLUR) {
+            filterHudButtonBlocks(ocrResult.blocks, ignoreControlsRect, isChinese)
+        } else {
+            ocrResult.blocks
+        }
+        val rawCombined = if (config.displayMode == DisplayMode.IN_PLACE_BLUR &&
+            filteredBlocks.size != ocrResult.blocks.size
+        ) {
+            if (filteredBlocks.isEmpty()) {
+                ""
+            } else if (isChinese) {
+                OcrTextPreprocessor.joinChineseBlocks(filteredBlocks.map { it.text })
+            } else {
+                OcrTextPreprocessor.joinParagraphLines(filteredBlocks.map { it.text }, isChinese = false)
+            }
+        } else {
+            ocrResult.fullText
+        }
+        val rawNormalized = normalizeText(rawCombined, isChinese)
+        val normalized = if (config.displayMode == DisplayMode.IN_PLACE_BLUR &&
+            isHudControlGlyph(rawNormalized)
+        ) {
+            ""
+        } else {
+            rawNormalized
+        }
         val current = _output.value
 
         val blankClearThreshold = if (config.displayMode == DisplayMode.IN_PLACE_BLUR) 3 else 2
@@ -292,7 +334,7 @@ class SubtitlePipeline(
         consecutiveSameTextPeeks = 0
         stealthCooldownUntilMs = 0L
         pendingCandidate = normalized
-        pendingBlocks = boxStabilizer.stabilize(ocrResult.blocks, isChinese)
+        pendingBlocks = boxStabilizer.stabilize(filteredBlocks, isChinese)
         recyclePendingSnapshot()
         if (config.displayMode == DisplayMode.IN_PLACE_BLUR && frameBitmap != null && !frameBitmap.isRecycled) {
             pendingSnapshot = runCatching {
@@ -1114,11 +1156,82 @@ class SubtitlePipeline(
         }
     }
 
+    private fun createControlMaskedOcrBitmap(
+        source: Bitmap,
+        controlsRect: RoiRect
+    ): Bitmap? {
+        if (source.isRecycled || source.width <= 0 || source.height <= 0) return null
+        return runCatching {
+            val left = controlsRect.x.coerceIn(0, source.width - 1)
+            val top = controlsRect.y.coerceIn(0, source.height - 1)
+            val right = (controlsRect.x + controlsRect.width).coerceIn(left + 1, source.width)
+            val bottom = (controlsRect.y + controlsRect.height).coerceIn(top + 1, source.height)
+            if (right - left < 4 || bottom - top < 4) return null
+
+            // Sample an adjacent background pixel just outside the tiny button area
+            val sampleX = (left - 2).coerceIn(0, source.width - 1)
+            val sampleY = (bottom + 2).coerceIn(0, source.height - 1)
+            val fillColor = source.getPixel(sampleX, sampleY)
+
+            val copy = source.copy(Bitmap.Config.ARGB_8888, true)
+            val canvas = Canvas(copy)
+            val paint = Paint().apply {
+                color = fillColor
+                style = Paint.Style.FILL
+            }
+            canvas.drawRect(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(), paint)
+            copy
+        }.getOrNull()
+    }
+
+    private fun filterHudButtonBlocks(
+        blocks: List<OcrBlock>,
+        controlsRect: RoiRect?,
+        isChinese: Boolean
+    ): List<OcrBlock> {
+        if (blocks.isEmpty()) return blocks
+        return blocks.filterNot { block ->
+            val cleaned = normalizeText(block.text, isChinese)
+            if (isHudControlGlyph(cleaned)) {
+                return@filterNot true
+            }
+            if (controlsRect == null) return@filterNot false
+            val box = block.boundingBox
+            val interW = (minOf(box.x + box.width, controlsRect.x + controlsRect.width) -
+                maxOf(box.x, controlsRect.x)).coerceAtLeast(0)
+            val interH = (minOf(box.y + box.height, controlsRect.y + controlsRect.height) -
+                maxOf(box.y, controlsRect.y)).coerceAtLeast(0)
+            val blockArea = (box.width * box.height).coerceAtLeast(1)
+            val overlapRatio = (interW * interH).toFloat() / blockArea.toFloat()
+
+            val cx = box.x + box.width / 2
+            val cy = box.y + box.height / 2
+            val centerInside = cx in (controlsRect.x - 8)..(controlsRect.x + controlsRect.width + 8) &&
+                cy in (controlsRect.y - 8)..(controlsRect.y + controlsRect.height + 8)
+
+            val compactText = cleaned.replace(" ", "")
+            overlapRatio >= 0.65f || ((overlapRatio >= 0.30f || centerInside) && compactText.length <= 4)
+        }
+    }
+
+    private fun isHudControlGlyph(normalizedText: String): Boolean {
+        if (normalizedText.isBlank()) return false
+        val stripped = normalizedText.lowercase()
+            .replace(MINOR_PUNCT_REGEX, "")
+            .replace(" ", "")
+            .trim()
+        if (stripped.isEmpty()) return true
+        return HUD_BUTTON_GLYPHS.contains(stripped)
+    }
+
     companion object {
         private const val AI_MIN_REQUEST_INTERVAL_MS = 400L
         internal const val SELF_TRANSLATION_SIMILARITY_THRESHOLD = 0.80f
         private val MINOR_PUNCT_REGEX = Regex("[.,!?;:'\"`~•·]+")
         private val TOKEN_SPLIT_REGEX = Regex("[^\\p{L}\\p{Nd}]+")
+        private val HUD_BUTTON_GLYPHS = setOf(
+            "x", "×", "✕", "✖", "╳", "+", "*", "o", "ox", "xo", "qx", "xq"
+        )
 
         fun normalizeText(input: String, isChinese: Boolean = false): String {
             return OcrTextPreprocessor.clean(input, isChinese)

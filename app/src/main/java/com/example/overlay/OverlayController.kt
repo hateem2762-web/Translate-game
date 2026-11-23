@@ -262,6 +262,25 @@ class OverlayController(
         return roiView?.getActiveMaskRectsInRoi() ?: (emptyList<RoiRect>() to 0)
     }
 
+    fun getInPlaceControlsRectInRoi(): RoiRect? {
+        if (currentHubStage != OverlayHubStage.ACTIVE_MODE ||
+            currentDisplayMode != DisplayMode.IN_PLACE_BLUR
+        ) {
+            return null
+        }
+        val ctrlScreen = hudView?.getInPlaceControlsScreenRect() ?: return null
+        val roi = getActiveCaptureRoi()
+        val padPx = dp(6f)
+        val left = (ctrlScreen.x - roi.x - padPx).coerceIn(0, roi.width)
+        val top = (ctrlScreen.y - roi.y - padPx).coerceIn(0, roi.height)
+        val right = (ctrlScreen.x + ctrlScreen.width - roi.x + padPx).coerceIn(left, roi.width)
+        val bottom = (ctrlScreen.y + ctrlScreen.height - roi.y + padPx).coerceIn(top, roi.height)
+        val w = right - left
+        val h = bottom - top
+        if (w < 8 || h < 8) return null
+        return RoiRect(x = left, y = top, width = w, height = h)
+    }
+
     fun setInPlaceStealth(hidden: Boolean) {
         roiView?.setInPlaceStealth(hidden)
         hudView?.setInPlaceStealth(hidden)

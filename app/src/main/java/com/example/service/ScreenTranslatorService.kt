@@ -448,7 +448,14 @@ class ScreenTranslatorService : Service() {
                     }
 
                     if (cleanBitmap != null) {
-                        pipeline.processFrame(cleanBitmap, currentConfig)
+                        val ignoreControls = if (currentConfig.displayMode == DisplayMode.IN_PLACE_BLUR &&
+                            !isInPlaceWithActiveMask
+                        ) {
+                            overlayController.getInPlaceControlsRectInRoi()
+                        } else {
+                            null
+                        }
+                        pipeline.processFrame(cleanBitmap, currentConfig, ignoreControls)
                     }
                 }
 

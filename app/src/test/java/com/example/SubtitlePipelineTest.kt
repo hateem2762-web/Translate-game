@@ -1024,4 +1024,66 @@ class SubtitlePipelineTest {
         assertTrue(com.example.model.BlurBackdropStyle.entries.contains(com.example.model.BlurBackdropStyle.DARK_FROSTED))
         assertTrue(com.example.model.BlurBackdropStyle.entries.contains(com.example.model.BlurBackdropStyle.REAL_BLUR))
     }
+
+    @Test
+    fun `blur mode ignores top-right X close button and Lock controls rect without translating`() = runTest {
+        val translatedInputs = mutableListOf<String>()
+        val web = object : TranslationProvider {
+            override val mode: TranslationEngineMode = TranslationEngineMode.GOOGLE_FREE
+            override suspend fun isReady(config: TranslationConfig): Boolean = true
+            override suspend fun translate(text: String, config: TranslationConfig): String {
+                translatedInputs.add(text)
+                return "Kuzey kapısını aç"
+            }
+            override fun close() = Unit
+        }
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(TranslationEngineMode.GOOGLE_FREE to web),
+            cacheStore = InMemoryCacheStore()
+        )
+        val config = TranslationConfig(
+            debounceMs = 200L,
+            displayMode = DisplayMode.IN_PLACE_BLUR,
+            engineMode = TranslationEngineMode.GOOGLE_FREE
+        )
+        val controlsRect = com.example.model.RoiRect(x = 760, y = 4, width = 110, height = 56)
+
+        // 1. Standalone "X" or "O X" read from HUD close/lock corner must never translate
+        pipeline.processRecognizedResult(
+            OcrResult(
+                fullText = "X",
+                blocks = listOf(OcrBlock("X", com.example.model.RoiRect(820, 10, 32, 32)))
+            ),
+            null,
+            config,
+            ignoreControlsRect = controlsRect
+        )
+        advanceTimeBy(300L)
+        runCurrent()
+        assertEquals(0, translatedInputs.size)
+        assertEquals("", pipeline.output.value.translatedText)
+        assertEquals(null, pipeline.output.value.lastCompletedEntry)
+
+        // 2. Real subtitle combined with an overlapping corner artifact drops only the corner artifact
+        pipeline.processRecognizedResult(
+            OcrResult(
+                fullText = "Ox Open the north gate",
+                blocks = listOf(
+                    OcrBlock("Ox", com.example.model.RoiRect(775, 10, 80, 34)),
+                    OcrBlock("Open the north gate", com.example.model.RoiRect(140, 120, 520, 48))
+                )
+            ),
+            null,
+            config,
+            ignoreControlsRect = controlsRect
+        )
+        advanceTimeBy(200L)
+        runCurrent()
+
+        assertEquals(listOf("Open the north gate"), translatedInputs)
+        assertEquals("Kuzey kapısını aç", pipeline.output.value.translatedText)
+        assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+    }
 }
