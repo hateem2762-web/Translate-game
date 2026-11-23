@@ -84,13 +84,19 @@ class SubtitleHudOverlayView(
     private val originalTextView: OutlinedSubtitleTextView
     private val classicResizeGrip: ClassicResizeGripView
 
-    // Active In-Place Blur compact "X" close-to-bubble badge & optional error banner
+    // Active In-Place Blur minimal inner top-right controls (Lock + Close) & optional error banner
     private val inPlaceHandleContainer: LinearLayout
-    private val inPlaceCloseButton: ImageButton
+    private val inPlaceControlsRow: LinearLayout
+    private val inPlaceLockTouchWrapper: FrameLayout
+    private val inPlaceLockButton: ImageView
+    private val inPlaceLockBg: GradientDrawable
+    private val inPlaceCloseTouchWrapper: FrameLayout
+    private val inPlaceCloseButton: ImageView
     private val inPlaceCloseBg: GradientDrawable
     private val inPlaceErrorBanner: TextView
 
     private var isClassicBoxStealth: Boolean = false
+    private var isInPlaceLocked: Boolean = false
     private var lastClassicBoxOpacity: Float = 0.86f
     private var lastBorderAccentColor: Int = Color.parseColor(TranslationEngineMode.OFFLINE_LOCAL.accentHex)
     private var currentDisplayMode: DisplayMode = DisplayMode.CLASSIC_BOX
@@ -325,29 +331,80 @@ class SubtitleHudOverlayView(
 
         addView(classicWrapper, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
 
-        // 2. Active In-Place Blur "X" close-to-bubble edge badge
+        // 2. Active In-Place Blur minimal inner top-right controls: [Lock (20dp)] [Close X (20dp)]
         inPlaceHandleContainer = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.END
             visibility = View.GONE
         }
 
+        inPlaceControlsRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        inPlaceLockBg = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.argb(145, 9, 14, 23))
+            setStroke(dp(0.9f).coerceAtLeast(1), Color.argb(145, 34, 211, 238))
+        }
+        inPlaceLockButton = ImageView(context).apply {
+            setImageResource(R.drawable.ic_blur_unlock_thin)
+            contentDescription = "Blur bölgesini kilitle veya kilidi aç"
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setColorFilter(Color.parseColor("#E2E8F0"))
+            background = inPlaceLockBg
+            setPadding(dp(4.5f), dp(4.5f), dp(4.5f), dp(4.5f))
+            alpha = 0.34f
+        }
+        inPlaceLockTouchWrapper = FrameLayout(context).apply {
+            contentDescription = "Blur bölgesini kilitle veya kilidi aç"
+            addView(
+                inPlaceLockButton,
+                LayoutParams(dp(20f), dp(20f)).apply {
+                    gravity = Gravity.CENTER
+                }
+            )
+            setupMinimalCornerTouch(inPlaceLockButton) { onToggleLockRoi() }
+        }
+        inPlaceControlsRow.addView(
+            inPlaceLockTouchWrapper,
+            LinearLayout.LayoutParams(dp(24f), dp(24f))
+        )
+
         inPlaceCloseBg = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(Color.argb(228, 9, 14, 23))
-            setStroke(dp(1.4f), Color.argb(190, 251, 113, 133))
+            setColor(Color.argb(145, 9, 14, 23))
+            setStroke(dp(0.9f).coerceAtLeast(1), Color.argb(160, 251, 113, 133))
         }
-        inPlaceCloseButton = ImageButton(context).apply {
-            setImageResource(R.drawable.ic_hud_close)
+        inPlaceCloseButton = ImageView(context).apply {
+            setImageResource(R.drawable.ic_blur_close_thin)
             contentDescription = "Doğal Blur modunu kapat ve balona dön"
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setColorFilter(Color.parseColor("#FFE4E6"))
             background = inPlaceCloseBg
-            elevation = dp(4f).toFloat()
-            setPadding(dp(9f), dp(9f), dp(9f), dp(9f))
-            setOnClickListener { onCloseActiveMode() }
+            setPadding(dp(4.5f), dp(4.5f), dp(4.5f), dp(4.5f))
+            alpha = 0.34f
         }
-        inPlaceHandleContainer.addView(inPlaceCloseButton, LinearLayout.LayoutParams(dp(38f), dp(38f)))
+        inPlaceCloseTouchWrapper = FrameLayout(context).apply {
+            contentDescription = "Doğal Blur modunu kapat ve balona dön"
+            addView(
+                inPlaceCloseButton,
+                LayoutParams(dp(20f), dp(20f)).apply {
+                    gravity = Gravity.CENTER
+                }
+            )
+            setupMinimalCornerTouch(inPlaceCloseButton) { onCloseActiveMode() }
+        }
+        inPlaceControlsRow.addView(
+            inPlaceCloseTouchWrapper,
+            LinearLayout.LayoutParams(dp(24f), dp(24f))
+        )
+
+        inPlaceHandleContainer.addView(
+            inPlaceControlsRow,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
 
         inPlaceErrorBanner = TextView(context).apply {
             visibility = View.GONE
@@ -365,13 +422,15 @@ class SubtitleHudOverlayView(
         }
         inPlaceHandleContainer.addView(
             inPlaceErrorBanner,
-            LinearLayout.LayoutParams(dp(230f), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            LinearLayout.LayoutParams(dp(216f), LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = dp(4f)
             }
         )
 
         addView(inPlaceHandleContainer, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
     }
+
+    fun hasInPlaceError(): Boolean = inPlaceErrorBanner.visibility == View.VISIBLE
 
     /**
      * Adjusts ONLY the Classic Box background & border alpha (0% to 100%).
@@ -488,10 +547,28 @@ class SubtitleHudOverlayView(
         }
 
         if (isBlur) {
-            inPlaceCloseBg.setStroke(
-                dp(1.4f),
-                if (telemetry.errorMessage != null) Color.parseColor("#FB7185") else engineAccentColor
+            isInPlaceLocked = telemetry.isRoiLocked
+            val restingAlpha = if (isInPlaceLocked) 0.24f else 0.34f
+            inPlaceLockButton.setImageResource(
+                if (isInPlaceLocked) R.drawable.ic_blur_lock_thin else R.drawable.ic_blur_unlock_thin
             )
+            inPlaceLockButton.setColorFilter(
+                if (isInPlaceLocked) Color.parseColor("#67E8F9") else Color.parseColor("#E2E8F0")
+            )
+            inPlaceLockBg.setStroke(
+                dp(0.9f).coerceAtLeast(1),
+                if (isInPlaceLocked) Color.argb(180, 34, 211, 238) else Color.argb(135, 148, 163, 184)
+            )
+            inPlaceCloseBg.setStroke(
+                dp(0.9f).coerceAtLeast(1),
+                if (telemetry.errorMessage != null) Color.parseColor("#FB7185") else Color.argb(150, 251, 113, 133)
+            )
+            if (!inPlaceLockTouchWrapper.isPressed) {
+                inPlaceLockButton.alpha = restingAlpha
+            }
+            if (!inPlaceCloseTouchWrapper.isPressed) {
+                inPlaceCloseButton.alpha = restingAlpha
+            }
             if (telemetry.errorMessage != null) {
                 inPlaceErrorBanner.visibility = View.VISIBLE
                 inPlaceErrorBanner.text = "${selectedEngine.formatSourceTag(telemetry.aiPreset)} ${telemetry.errorMessage}"
@@ -727,6 +804,54 @@ class SubtitleHudOverlayView(
             setPadding(dp(4.5f), dp(4.5f), dp(4.5f), dp(4.5f))
             layoutParams = LinearLayout.LayoutParams(size, size)
             setOnClickListener { onClick() }
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupMinimalCornerTouch(visualBtn: View, onClick: () -> Unit) {
+        val slop = dp(8f).toFloat()
+        visualBtn.setOnTouchListener(null)
+        // Attach to wrapper via parent when added
+        (visualBtn.parent as? View)?.setOnTouchListener { wrapper, event ->
+            val restingAlpha = if (isInPlaceLocked) 0.24f else 0.34f
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    wrapper.isPressed = true
+                    visualBtn.animate().cancel()
+                    visualBtn.alpha = 0.96f
+                    visualBtn.scaleX = 1.08f
+                    visualBtn.scaleY = 1.08f
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val inside = event.x >= -slop && event.x <= wrapper.width + slop &&
+                        event.y >= -slop && event.y <= wrapper.height + slop
+                    visualBtn.alpha = if (inside) 0.96f else restingAlpha
+                    visualBtn.scaleX = if (inside) 1.08f else 1f
+                    visualBtn.scaleY = if (inside) 1.08f else 1f
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    wrapper.isPressed = false
+                    val inside = event.x >= -slop && event.x <= wrapper.width + slop &&
+                        event.y >= -slop && event.y <= wrapper.height + slop
+                    visualBtn.alpha = restingAlpha
+                    visualBtn.scaleX = 1f
+                    visualBtn.scaleY = 1f
+                    if (inside) {
+                        onClick()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    wrapper.isPressed = false
+                    visualBtn.alpha = restingAlpha
+                    visualBtn.scaleX = 1f
+                    visualBtn.scaleY = 1f
+                    true
+                }
+                else -> false
+            }
         }
     }
 

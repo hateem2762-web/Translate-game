@@ -63,6 +63,7 @@ class OverlayController(
 
     private var currentRoi: RoiRect = RoiRect.defaultForScreen(1080, 1920)
     private var currentDisplayMode: DisplayMode? = null
+    private var currentRoiLocked: Boolean = false
     private var currentHubStage: OverlayHubStage = OverlayHubStage.BUBBLE_IDLE
     private var currentBubbleBehavior: FloatingBubbleBehavior? = null
     private var currentBubbleTheme: FloatingBubbleTheme? = null
@@ -113,6 +114,7 @@ class OverlayController(
                 onRoiChanged(actualRect)
             }
         ).apply {
+            setLocked(false, hideFrameWhenLocked = initialConfig.displayMode == DisplayMode.IN_PLACE_BLUR)
             visibility = View.GONE
         }
 
@@ -427,9 +429,11 @@ class OverlayController(
     }
 
     fun setRoiLocked(locked: Boolean) {
+        currentRoiLocked = locked
         val view = roiView ?: return
         val params = roiParams ?: return
-        view.setLocked(locked)
+        val hideFrame = currentDisplayMode == DisplayMode.IN_PLACE_BLUR
+        view.setLocked(locked, hideFrameWhenLocked = hideFrame)
 
         val baseFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
@@ -448,11 +452,16 @@ class OverlayController(
         val modeChanged = currentDisplayMode != telemetry.displayMode
         val behaviorChanged = currentBubbleBehavior != telemetry.bubbleBehavior
         val themeChanged = currentBubbleTheme != telemetry.bubbleTheme
+        val lockChanged = currentRoiLocked != telemetry.isRoiLocked
 
         currentHubStage = telemetry.overlayHubStage
         currentDisplayMode = telemetry.displayMode
         currentBubbleBehavior = telemetry.bubbleBehavior
         currentBubbleTheme = telemetry.bubbleTheme
+
+        if (lockChanged || modeChanged) {
+            setRoiLocked(telemetry.isRoiLocked)
+        }
 
         savedClassicX = telemetry.classicBoxX
         savedClassicY = telemetry.classicBoxY
@@ -470,6 +479,10 @@ class OverlayController(
             if (roi.visibility != targetRoiVis) {
                 roi.visibility = targetRoiVis
             }
+            roi.setLocked(
+                locked = telemetry.isRoiLocked,
+                hideFrameWhenLocked = telemetry.displayMode == DisplayMode.IN_PLACE_BLUR
+            )
             val style = InPlaceRenderStyle.fromTelemetry(telemetry)
             if (isActive && telemetry.displayMode == DisplayMode.IN_PLACE_BLUR) {
                 roi.updateInPlaceBlocks(telemetry.inPlaceBlocks, style)
@@ -478,7 +491,9 @@ class OverlayController(
             }
         }
 
-        // Active-Mode HUD (Classic Box OR In-Place Blur corner "X" close button)
+        val hadInPlaceError = hudView?.hasInPlaceError() == true
+
+        // Active-Mode HUD (Classic Box OR In-Place Blur inner corner Lock + X controls)
         hudView?.let { hud ->
             val targetHudVis = if (isActive) View.VISIBLE else View.GONE
             if (hud.visibility != targetHudVis) {
@@ -487,7 +502,14 @@ class OverlayController(
             hud.updateClassicBoxOpacity(telemetry.classicBoxOpacity)
             hud.render(telemetry, showOriginal)
         }
-        if (isActive && (stageChanged || modeChanged || (telemetry.displayMode == DisplayMode.CLASSIC_BOX && classicSizeChanged))) {
+        val hasInPlaceError = hudView?.hasInPlaceError() == true
+        if (isActive && (
+                stageChanged ||
+                    modeChanged ||
+                    (telemetry.displayMode == DisplayMode.CLASSIC_BOX && classicSizeChanged) ||
+                    (telemetry.displayMode == DisplayMode.IN_PLACE_BLUR && hadInPlaceError != hasInPlaceError)
+                )
+        ) {
             syncHudWindowLayout(telemetry.displayMode)
         }
 
@@ -576,13 +598,18 @@ class OverlayController(
             params.width = WindowManager.LayoutParams.WRAP_CONTENT
             params.height = WindowManager.LayoutParams.WRAP_CONTENT
             val rParams = roiParams
+            val rTopBar = roiView?.getTopBarHeightPx() ?: dp(28f)
+            val containerW = if (view.hasInPlaceError()) dp(216f) else dp(48f)
             val targetX = if (rParams != null) {
-                (rParams.x + rParams.width - dp(40f)).coerceIn(dp(8f), (bounds.width - dp(44f)).coerceAtLeast(dp(8f)))
+                (rParams.x + rParams.width - containerW - dp(6f))
+                    .coerceIn(dp(4f), (bounds.width - containerW - dp(4f)).coerceAtLeast(dp(4f)))
             } else {
-                (bounds.width - dp(54f)).coerceAtLeast(dp(8f))
+                (bounds.width - containerW - dp(8f)).coerceAtLeast(dp(4f))
             }
             val targetY = if (rParams != null) {
-                (rParams.y - dp(6f)).coerceIn(dp(16f), (bounds.height - dp(56f)).coerceAtLeast(dp(16f)))
+                val boxTop = rParams.y + rTopBar
+                val maxYInside = (rParams.y + rParams.height - dp(28f)).coerceAtLeast(boxTop)
+                (boxTop + dp(4f)).coerceIn(dp(8f), minOf(maxYInside, (bounds.height - dp(32f)).coerceAtLeast(dp(8f))))
             } else {
                 dp(36f)
             }

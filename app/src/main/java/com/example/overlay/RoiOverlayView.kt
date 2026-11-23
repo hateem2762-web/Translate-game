@@ -103,12 +103,12 @@ class RoiOverlayView(
 
     fun getTopBarHeightPx(): Int = topBarHeightPx
 
-    fun setLocked(locked: Boolean) {
+    fun setLocked(locked: Boolean, hideFrameWhenLocked: Boolean = false) {
         isLocked = locked
         // Keep INVISIBLE (not GONE) so reticleBox coordinates never shift on screen
         dragPill.visibility = if (locked) View.INVISIBLE else View.VISIBLE
         resizeGrip.visibility = if (locked) View.INVISIBLE else View.VISIBLE
-        reticleBox.setLocked(locked)
+        reticleBox.setLocked(locked, hideFrameWhenLocked)
     }
 
     fun updateInPlaceBlocks(blocks: List<InPlaceBlock>, style: InPlaceRenderStyle = InPlaceRenderStyle()) {
@@ -332,6 +332,7 @@ class RoiOverlayView(
     private class ReticleView(context: Context) : View(context) {
         private val density = resources.displayMetrics.density
         private var locked = false
+        private var hideFrameWhenLocked = false
 
         private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(16, 34, 211, 238)
@@ -351,16 +352,24 @@ class RoiOverlayView(
             strokeCap = Paint.Cap.ROUND
         }
 
-        fun setLocked(isLocked: Boolean) {
+        fun setLocked(isLocked: Boolean, hideFrame: Boolean = false) {
+            if (locked == isLocked && hideFrameWhenLocked == hideFrame) return
             locked = isLocked
-            bracketPaint.alpha = if (isLocked) 85 else 255
-            bracketPaint.strokeWidth = (if (isLocked) 1.8f else 3f) * density
-            borderPaint.alpha = if (isLocked) 25 else 110
+            hideFrameWhenLocked = hideFrame
+            if (isLocked && hideFrame) {
+                bracketPaint.alpha = 0
+                borderPaint.alpha = 0
+            } else {
+                bracketPaint.alpha = if (isLocked) 85 else 255
+                bracketPaint.strokeWidth = (if (isLocked) 1.8f else 3f) * density
+                borderPaint.alpha = if (isLocked) 25 else 110
+            }
             invalidate()
         }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
+            if (locked && hideFrameWhenLocked) return
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
