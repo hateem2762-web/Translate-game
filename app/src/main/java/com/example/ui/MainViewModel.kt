@@ -24,6 +24,7 @@ import com.example.engine.SmartAiTranslationProvider
 import com.example.engine.SubtitlePipeline
 import com.example.model.AiModelOption
 import com.example.model.AiProviderPreset
+import com.example.model.BlurBackdropStyle
 import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
 import com.example.model.FloatingBubbleBehavior
@@ -319,6 +320,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { settingsStore.updateInPlaceOffsetY(dp) }
     }
 
+    fun updateInPlaceBlurStyle(style: BlurBackdropStyle) {
+        viewModelScope.launch { settingsStore.updateInPlaceBlurStyle(style) }
+    }
+
+    fun updateInPlaceBlurIntensity(intensity: Float) {
+        viewModelScope.launch { settingsStore.updateInPlaceBlurIntensity(intensity) }
+    }
+
     fun resetInPlaceTuning() {
         viewModelScope.launch { settingsStore.resetInPlaceTuning() }
     }
@@ -526,11 +535,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val normSource = SubtitlePipeline.normalizeText(ocrResult.fullText, isChinese)
 
-                // Build frosted blur patches once while sceneBitmap is live
+                // Build blur patches once while sceneBitmap is live
                 val basePatches: List<InPlaceBlock> = if (isMultiBlock) {
                     mergedBlocks.mapIndexed { idx, block ->
                         val patchResult: BlurredPatchResult = withContext(Dispatchers.Default) {
-                            BlurMaskHelper.createFrostedPatch(sceneBitmap, block.boundingBox, effectiveConfig.overlayOpacity)
+                            BlurMaskHelper.createPatch(
+                                sourceBitmap = sceneBitmap,
+                                box = block.boundingBox,
+                                opacity = effectiveConfig.overlayOpacity,
+                                blurStyle = effectiveConfig.inPlaceBlurStyle,
+                                blurIntensity = effectiveConfig.inPlaceBlurIntensity
+                            )
                         }
                         InPlaceBlock(
                             boundingBox = block.boundingBox,
@@ -544,7 +559,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val firstBox = mergedBlocks.firstOrNull()?.boundingBox
                         ?: RoiRect(24, (sceneBitmap.height * 0.55f).toInt(), sceneBitmap.width - 48, 80)
                     val patchResult = withContext(Dispatchers.Default) {
-                        BlurMaskHelper.createFrostedPatch(sceneBitmap, firstBox, effectiveConfig.overlayOpacity)
+                        BlurMaskHelper.createPatch(
+                            sourceBitmap = sceneBitmap,
+                            box = firstBox,
+                            opacity = effectiveConfig.overlayOpacity,
+                            blurStyle = effectiveConfig.inPlaceBlurStyle,
+                            blurIntensity = effectiveConfig.inPlaceBlurIntensity
+                        )
                     }
                     listOf(
                         InPlaceBlock(

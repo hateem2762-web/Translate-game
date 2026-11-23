@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.model.AiProviderPreset
+import com.example.model.BlurBackdropStyle
 import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
 import com.example.model.FloatingBubbleBehavior
@@ -111,6 +112,8 @@ fun MainScreen(
     onInPlaceCornerRadiusChange: (Float) -> Unit,
     onInPlaceOffsetXChange: (Float) -> Unit,
     onInPlaceOffsetYChange: (Float) -> Unit,
+    onInPlaceBlurStyleChange: (BlurBackdropStyle) -> Unit,
+    onInPlaceBlurIntensityChange: (Float) -> Unit,
     onResetInPlaceTuning: () -> Unit,
     onClassicBoxWidthChange: (Int) -> Unit,
     onClassicBoxHeightChange: (Int) -> Unit,
@@ -278,6 +281,8 @@ fun MainScreen(
                             onInPlaceCornerRadiusChange = onInPlaceCornerRadiusChange,
                             onInPlaceOffsetXChange = onInPlaceOffsetXChange,
                             onInPlaceOffsetYChange = onInPlaceOffsetYChange,
+                            onInPlaceBlurStyleChange = onInPlaceBlurStyleChange,
+                            onInPlaceBlurIntensityChange = onInPlaceBlurIntensityChange,
                             onResetInPlaceTuning = onResetInPlaceTuning
                         )
                         MainTab.SANDBOX_HISTORY -> SandboxAndHistoryTabContent(

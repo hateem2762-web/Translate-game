@@ -161,9 +161,13 @@ class ScreenTranslatorService : Service() {
                     config.aiApiKey != currentConfig.aiApiKey
                 val modeOrEngineChanged = config.displayMode != currentConfig.displayMode ||
                     config.engineMode != currentConfig.engineMode
+                val blurAppearanceChanged = config.inPlaceBlurStyle != currentConfig.inPlaceBlurStyle ||
+                    config.inPlaceBlurIntensity != currentConfig.inPlaceBlurIntensity
                 currentConfig = config
                 if (modeOrEngineChanged || presetOrModelChanged) {
                     pipeline.reset()
+                } else if (blurAppearanceChanged) {
+                    pipeline.invalidateVisualCache()
                 }
                 val configured = AiProviderPreset.entries.filter { p ->
                     config.apiKeyFor(p).isNotBlank()
@@ -182,6 +186,8 @@ class ScreenTranslatorService : Service() {
                         inPlaceCornerRadiusDp = config.inPlaceCornerRadiusDp,
                         inPlaceOffsetXdp = config.inPlaceOffsetXdp,
                         inPlaceOffsetYdp = config.inPlaceOffsetYdp,
+                        inPlaceBlurStyle = config.inPlaceBlurStyle,
+                        inPlaceBlurIntensity = config.inPlaceBlurIntensity,
                         classicBoxWidthDp = config.classicBoxWidthDp,
                         classicBoxHeightDp = config.classicBoxHeightDp,
                         classicBoxX = config.classicBoxX,
@@ -222,6 +228,8 @@ class ScreenTranslatorService : Service() {
                         inPlaceCornerRadiusDp = currentConfig.inPlaceCornerRadiusDp,
                         inPlaceOffsetXdp = currentConfig.inPlaceOffsetXdp,
                         inPlaceOffsetYdp = currentConfig.inPlaceOffsetYdp,
+                        inPlaceBlurStyle = currentConfig.inPlaceBlurStyle,
+                        inPlaceBlurIntensity = currentConfig.inPlaceBlurIntensity,
                         classicBoxWidthDp = currentConfig.classicBoxWidthDp,
                         classicBoxHeightDp = currentConfig.classicBoxHeightDp,
                         classicBoxX = currentConfig.classicBoxX,
@@ -326,6 +334,8 @@ class ScreenTranslatorService : Service() {
                         inPlaceCornerRadiusDp = currentConfig.inPlaceCornerRadiusDp,
                         inPlaceOffsetXdp = currentConfig.inPlaceOffsetXdp,
                         inPlaceOffsetYdp = currentConfig.inPlaceOffsetYdp,
+                        inPlaceBlurStyle = currentConfig.inPlaceBlurStyle,
+                        inPlaceBlurIntensity = currentConfig.inPlaceBlurIntensity,
                         classicBoxWidthDp = currentConfig.classicBoxWidthDp,
                         classicBoxHeightDp = currentConfig.classicBoxHeightDp,
                         classicBoxX = currentConfig.classicBoxX,
@@ -418,8 +428,8 @@ class ScreenTranslatorService : Service() {
                                 captureManager.awaitAndCaptureStealthRoi(
                                     roi = roi,
                                     minValidTimestampNs = minValidTsNs,
-                                    settleMs = 18L,
-                                    maxWaitMs = 76L
+                                    settleMs = 12L,
+                                    maxWaitMs = 96L
                                 )
                             } finally {
                                 overlayController.setInPlaceStealth(false)

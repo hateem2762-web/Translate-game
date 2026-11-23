@@ -432,6 +432,16 @@ class SubtitleHudOverlayView(
 
     fun hasInPlaceError(): Boolean = inPlaceErrorBanner.visibility == View.VISIBLE
 
+    fun setInPlaceStealth(hidden: Boolean) {
+        if (currentDisplayMode != DisplayMode.IN_PLACE_BLUR) return
+        val targetVis = if (hidden) View.INVISIBLE else View.VISIBLE
+        val targetAlpha = if (hidden) 0f else 1f
+        if (inPlaceHandleContainer.visibility == targetVis && inPlaceHandleContainer.alpha == targetAlpha) return
+        inPlaceHandleContainer.visibility = targetVis
+        inPlaceHandleContainer.alpha = targetAlpha
+        inPlaceHandleContainer.invalidate()
+    }
+
     /**
      * Adjusts ONLY the Classic Box background & border alpha (0% to 100%).
      * Translated text and its protective outline/shadow always remain at 100% full visibility.

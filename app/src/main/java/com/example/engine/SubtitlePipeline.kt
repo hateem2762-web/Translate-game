@@ -51,6 +51,7 @@ class SubtitlePipeline(
     private var pendingSnapshot: Bitmap? = null
 
     private var lastTranslatedSource: String = ""
+    private var lastTranslatedText: String = ""
     private var lastRenderedTranslations: MutableSet<String> = mutableSetOf()
     private var lastRenderedCombined: String = ""
     private var consecutiveBlankFrames: Int = 0
@@ -71,6 +72,7 @@ class SubtitlePipeline(
         pendingBlocks = emptyList()
         recyclePendingSnapshot()
         lastTranslatedSource = ""
+        lastTranslatedText = ""
         lastRenderedTranslations.clear()
         lastRenderedCombined = ""
         consecutiveBlankFrames = 0
@@ -90,6 +92,7 @@ class SubtitlePipeline(
 
     fun clearActiveSubtitle() {
         lastTranslatedSource = ""
+        lastTranslatedText = ""
         lastRenderedTranslations.clear()
         lastRenderedCombined = ""
         consecutiveBlankFrames = 0
@@ -101,7 +104,8 @@ class SubtitlePipeline(
             translatedText = "",
             inPlaceBlocks = emptyList(),
             isStabilizing = false,
-            isAiRefining = false
+            isAiRefining = false,
+            lastCompletedEntry = null
         )
     }
 
@@ -166,7 +170,10 @@ class SubtitlePipeline(
                 debounceJob?.isActive == true
             if (!hasActiveContent) {
                 consecutiveBlankFrames = 0
-                _output.value = current.copy(framesProcessed = current.framesProcessed + 1)
+                _output.value = current.copy(
+                    framesProcessed = current.framesProcessed + 1,
+                    lastCompletedEntry = null
+                )
                 return
             }
             consecutiveBlankFrames++
@@ -180,6 +187,7 @@ class SubtitlePipeline(
                 pendingBlocks = emptyList()
                 recyclePendingSnapshot()
                 lastTranslatedSource = ""
+                lastTranslatedText = ""
                 lastRenderedTranslations.clear()
                 lastRenderedCombined = ""
                 boxStabilizer.reset()
@@ -190,7 +198,8 @@ class SubtitlePipeline(
                         inPlaceBlocks = emptyList(),
                         isStabilizing = false,
                         isAiRefining = false,
-                        framesProcessed = current.framesProcessed + 1
+                        framesProcessed = current.framesProcessed + 1,
+                        lastCompletedEntry = null
                     )
                 } else {
                     _output.value = current.copy(
@@ -198,26 +207,38 @@ class SubtitlePipeline(
                         translatedText = "",
                         isStabilizing = false,
                         isAiRefining = false,
-                        framesProcessed = current.framesProcessed + 1
+                        framesProcessed = current.framesProcessed + 1,
+                        lastCompletedEntry = null
                     )
                 }
             } else {
-                _output.value = current.copy(framesProcessed = current.framesProcessed + 1)
+                _output.value = current.copy(
+                    framesProcessed = current.framesProcessed + 1,
+                    lastCompletedEntry = null
+                )
             }
             return
         }
 
         consecutiveBlankFrames = 0
 
-        // Self-OCR loop guard: in In-Place mode, never re-translate our own rendered overlay text
-        if (config.displayMode == DisplayMode.IN_PLACE_BLUR && isSelfGeneratedOverlayText(normalized)) {
+        // Layer B Self-OCR Loop & History Guard: in In-Place Blur mode, reject rendered overlay text
+        // (>= 80% similarity to lastTranslatedText) or already-target-language Turkish echoes,
+        // keep current subtitle fixed on screen, and never trigger translation or history entry.
+        if (config.displayMode == DisplayMode.IN_PLACE_BLUR && isSelfGeneratedOverlayText(normalized, config)) {
+            debounceJob?.cancel()
+            debounceJob = null
+            pendingCandidate = ""
+            pendingBlocks = emptyList()
+            recyclePendingSnapshot()
             consecutiveSameTextPeeks = (consecutiveSameTextPeeks + 1).coerceAtMost(2)
             stealthCooldownUntilMs = System.currentTimeMillis() + 1200L
             frameDiffer.reset()
             _output.value = current.copy(
                 framesProcessed = current.framesProcessed + 1,
                 framesSkipped = current.framesSkipped + 1,
-                isStabilizing = false
+                isStabilizing = false,
+                lastCompletedEntry = null
             )
             return
         }
@@ -236,13 +257,17 @@ class SubtitlePipeline(
             _output.value = current.copy(
                 framesProcessed = current.framesProcessed + 1,
                 framesSkipped = current.framesSkipped + 1,
-                isStabilizing = false
+                isStabilizing = false,
+                lastCompletedEntry = null
             )
             return
         }
 
         if (normalized == pendingCandidate) {
-            _output.value = current.copy(framesProcessed = current.framesProcessed + 1)
+            _output.value = current.copy(
+                framesProcessed = current.framesProcessed + 1,
+                lastCompletedEntry = null
+            )
             return
         }
 
@@ -258,7 +283,8 @@ class SubtitlePipeline(
         if (isPendingMinorFlicker) {
             _output.value = current.copy(
                 framesProcessed = current.framesProcessed + 1,
-                framesSkipped = current.framesSkipped + 1
+                framesSkipped = current.framesSkipped + 1,
+                lastCompletedEntry = null
             )
             return
         }
@@ -280,7 +306,8 @@ class SubtitlePipeline(
             isStabilizing = true,
             isAiRefining = false,
             framesProcessed = current.framesProcessed + 1,
-            errorMessage = null
+            errorMessage = null,
+            lastCompletedEntry = null
         )
 
         debounceJob = scope.launch {
@@ -342,7 +369,7 @@ class SubtitlePipeline(
                     )
                 }
                 if (aiCachedList.none { it == null }) {
-                    val patchBlocks = buildInPlaceBlocks(blocks, normalizedBlocks, aiCachedList.map { it.orEmpty() }, snapshot, config.overlayOpacity)
+                    val patchBlocks = buildInPlaceBlocks(blocks, normalizedBlocks, aiCachedList.map { it.orEmpty() }, snapshot, config)
                     recyclePendingSnapshot()
                     emitHybridSuccess(
                         sourceText = sourceText,
@@ -364,7 +391,7 @@ class SubtitlePipeline(
                 )
                 val cachedAi = exactAiCached ?: findFuzzyCachedTranslation(sourceText, aiCacheConfig)
                 if (cachedAi != null) {
-                    val singleBlocks = buildSingleInPlaceBlocks(sourceText, cachedAi, blocks, snapshot, config.overlayOpacity, config.displayMode)
+                    val singleBlocks = buildSingleInPlaceBlocks(sourceText, cachedAi, blocks, snapshot, config)
                     recyclePendingSnapshot()
                     emitHybridSuccess(
                         sourceText = sourceText,
@@ -382,9 +409,9 @@ class SubtitlePipeline(
             // Prepare frosted blur patches once (if IN_PLACE_BLUR) before recycling snapshot
             val baseInPlacePatches = if (config.displayMode == DisplayMode.IN_PLACE_BLUR && blocks.isNotEmpty()) {
                 if (isMultiBlockInPlace) {
-                    buildInPlaceBlocks(blocks, normalizedBlocks, List(blocks.size) { "" }, snapshot, config.overlayOpacity)
+                    buildInPlaceBlocks(blocks, normalizedBlocks, List(blocks.size) { "" }, snapshot, config)
                 } else {
-                    buildSingleInPlaceBlocks(sourceText, "", blocks, snapshot, config.overlayOpacity, config.displayMode)
+                    buildSingleInPlaceBlocks(sourceText, "", blocks, snapshot, config)
                 }
             } else {
                 emptyList()
@@ -511,7 +538,7 @@ class SubtitlePipeline(
                         entryEngine = TranslationEngineMode.SMART_AI
                     )
                 } else if (showedLocal) {
-                    _output.value = _output.value.copy(isAiRefining = false)
+                    _output.value = _output.value.copy(isAiRefining = false, lastCompletedEntry = null)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -520,7 +547,8 @@ class SubtitlePipeline(
                 _output.value = _output.value.copy(
                     isStabilizing = false,
                     isAiRefining = false,
-                    errorMessage = if (showedLocal) null else (e.localizedMessage ?: "AI çevirisi başarısız.")
+                    errorMessage = if (showedLocal) null else (e.localizedMessage ?: "AI çevirisi başarısız."),
+                    lastCompletedEntry = null
                 )
             }
         } catch (e: CancellationException) {
@@ -531,7 +559,8 @@ class SubtitlePipeline(
             _output.value = _output.value.copy(
                 isStabilizing = false,
                 isAiRefining = false,
-                errorMessage = e.localizedMessage ?: "Çeviri başarısız."
+                errorMessage = e.localizedMessage ?: "Çeviri başarısız.",
+                lastCompletedEntry = null
             )
         }
     }
@@ -546,6 +575,7 @@ class SubtitlePipeline(
         entryEngine: TranslationEngineMode
     ) {
         lastTranslatedSource = sourceText
+        lastTranslatedText = translatedText.trim()
         val normCombined = normalizeText(translatedText).lowercase()
         if (normCombined.isNotBlank()) {
             lastRenderedCombined = normCombined
@@ -635,11 +665,17 @@ class SubtitlePipeline(
         normalizedBlocks: List<String>,
         translations: List<String>,
         snapshot: Bitmap?,
-        opacity: Float
+        config: TranslationConfig
     ): List<InPlaceBlock> {
         return blocks.mapIndexed { idx, block ->
             val patchResult = if (snapshot != null && !snapshot.isRecycled) {
-                BlurMaskHelper.createFrostedPatch(snapshot, block.boundingBox, opacity)
+                BlurMaskHelper.createPatch(
+                    sourceBitmap = snapshot,
+                    box = block.boundingBox,
+                    opacity = config.overlayOpacity,
+                    blurStyle = config.inPlaceBlurStyle,
+                    blurIntensity = config.inPlaceBlurIntensity
+                )
             } else {
                 BlurredPatchResult(null, 0xDD090E17.toInt())
             }
@@ -658,13 +694,18 @@ class SubtitlePipeline(
         translatedText: String,
         blocks: List<OcrBlock>,
         snapshot: Bitmap?,
-        opacity: Float,
-        displayMode: DisplayMode
+        config: TranslationConfig
     ): List<InPlaceBlock> {
-        if (displayMode != DisplayMode.IN_PLACE_BLUR || blocks.isEmpty()) return emptyList()
+        if (config.displayMode != DisplayMode.IN_PLACE_BLUR || blocks.isEmpty()) return emptyList()
         val mergedBox = mergeBoundingBoxes(blocks.map { it.boundingBox })
         val patchResult = if (snapshot != null && !snapshot.isRecycled) {
-            BlurMaskHelper.createFrostedPatch(snapshot, mergedBox, opacity)
+            BlurMaskHelper.createPatch(
+                sourceBitmap = snapshot,
+                box = mergedBox,
+                opacity = config.overlayOpacity,
+                blurStyle = config.inPlaceBlurStyle,
+                blurIntensity = config.inPlaceBlurIntensity
+            )
         } else {
             BlurredPatchResult(null, 0xDD090E17.toInt())
         }
@@ -761,7 +802,13 @@ class SubtitlePipeline(
                     val blockNorm = normalizedBlocks[idx]
                     val translated = cachedTranslations[idx].orEmpty()
                     val patchResult = if (snapshot != null && !snapshot.isRecycled) {
-                        BlurMaskHelper.createFrostedPatch(snapshot, block.boundingBox, config.overlayOpacity)
+                        BlurMaskHelper.createPatch(
+                            sourceBitmap = snapshot,
+                            box = block.boundingBox,
+                            opacity = config.overlayOpacity,
+                            blurStyle = config.inPlaceBlurStyle,
+                            blurIntensity = config.inPlaceBlurIntensity
+                        )
                     } else {
                         BlurredPatchResult(null, 0xDD090E17.toInt())
                     }
@@ -807,14 +854,14 @@ class SubtitlePipeline(
                     translatedText = combinedTranslated,
                     blocks = blocks,
                     snapshot = snapshot,
-                    opacity = config.overlayOpacity,
-                    displayMode = config.displayMode
+                    config = config
                 )
             }
 
             recyclePendingSnapshot()
             val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
             lastTranslatedSource = sourceText
+            lastTranslatedText = combinedTranslated.trim()
             lastRenderedCombined = normalizeText(combinedTranslated).lowercase()
             lastRenderedTranslations = inPlaceResultBlocks
                 .map { normalizeText(it.translatedText).lowercase() }
@@ -856,7 +903,8 @@ class SubtitlePipeline(
                 isStabilizing = false,
                 isAiRefining = false,
                 resultEngineMode = config.engineMode,
-                errorMessage = e.localizedMessage ?: "Çeviri başarısız."
+                errorMessage = e.localizedMessage ?: "Çeviri başarısız.",
+                lastCompletedEntry = null
             )
         }
     }
@@ -873,35 +921,83 @@ class SubtitlePipeline(
         lastCloudCallElapsedMs = System.currentTimeMillis()
     }
 
-    private fun isSelfGeneratedOverlayText(normalizedOcr: String): Boolean {
+    private fun isSelfGeneratedOverlayText(
+        normalizedOcr: String,
+        config: TranslationConfig
+    ): Boolean {
         val lower = normalizedOcr.lowercase().trim()
         if (lower.isEmpty()) return false
+        val strippedOcr = stripMinorPunctuation(lower)
 
+        val candidates = LinkedHashSet<String>()
+        if (lastTranslatedText.isNotBlank()) {
+            candidates.add(normalizeText(lastTranslatedText).lowercase())
+            lastTranslatedText.lineSequence()
+                .map { normalizeText(it).lowercase() }
+                .filter { it.isNotBlank() }
+                .forEach { candidates.add(it) }
+        }
         val activeTranslated = _output.value.translatedText.trim().lowercase()
         if (activeTranslated.isNotBlank()) {
-            if (lower == activeTranslated) return true
-            if (activeTranslated.length >= 5 &&
-                BoundingBoxStabilizer.textSimilarity(lower, activeTranslated) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD
+            candidates.add(activeTranslated)
+        }
+        if (lastRenderedCombined.isNotBlank()) {
+            candidates.add(lastRenderedCombined)
+        }
+        candidates.addAll(lastRenderedTranslations)
+
+        for (candidate in candidates) {
+            if (lower == candidate) return true
+            val strippedCandidate = stripMinorPunctuation(candidate)
+            if (strippedOcr.isNotEmpty() && strippedOcr == strippedCandidate) return true
+
+            if (candidate.length >= 4 &&
+                BoundingBoxStabilizer.textSimilarity(lower, candidate) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD
+            ) {
+                return true
+            }
+            if (strippedCandidate.length >= 4 &&
+                strippedOcr.length >= 4 &&
+                BoundingBoxStabilizer.textSimilarity(strippedOcr, strippedCandidate) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD
+            ) {
+                return true
+            }
+            if (candidate.length >= 10 &&
+                lower.length >= 8 &&
+                (candidate.contains(lower) || lower.contains(candidate))
             ) {
                 return true
             }
         }
 
-        if (lastRenderedCombined.isNotBlank()) {
-            if (lower == lastRenderedCombined) return true
-            if (lastRenderedCombined.length >= 5 &&
-                BoundingBoxStabilizer.textSimilarity(lower, lastRenderedCombined) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD
-            ) {
-                return true
+        if (config.targetLangCode == TranslateLanguage.TURKISH &&
+            config.sourceLangCode != TranslateLanguage.TURKISH &&
+            isLikelyTurkishText(normalizedOcr, config.sourceLangCode)
+        ) {
+            return true
+        }
+        return false
+    }
+
+    private fun isLikelyTurkishText(text: String, sourceLangCode: String): Boolean {
+        var uniqueTurkishChars = 0
+        var totalTurkishDiacritics = 0
+        for (ch in text) {
+            when (ch) {
+                'ğ', 'Ğ', 'ş', 'Ş', 'ı', 'İ' -> {
+                    uniqueTurkishChars++
+                    totalTurkishDiacritics++
+                }
+                'ç', 'Ç', 'ö', 'Ö', 'ü', 'Ü' -> totalTurkishDiacritics++
             }
         }
-        for (renderedBlock in lastRenderedTranslations) {
-            if (lower == renderedBlock) return true
-            if (renderedBlock.length >= 5 &&
-                BoundingBoxStabilizer.textSimilarity(lower, renderedBlock) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD
-            ) {
-                return true
-            }
+        if (uniqueTurkishChars >= 1 && (lastTranslatedText.isNotBlank() || text.length >= 6)) {
+            return true
+        }
+        if ((sourceLangCode == TranslateLanguage.ENGLISH || sourceLangCode == TranslateLanguage.CHINESE) &&
+            totalTurkishDiacritics >= 2
+        ) {
+            return true
         }
         return false
     }
@@ -969,7 +1065,7 @@ class SubtitlePipeline(
 
     companion object {
         private const val AI_MIN_REQUEST_INTERVAL_MS = 400L
-        private const val SELF_TRANSLATION_SIMILARITY_THRESHOLD = 0.85f
+        internal const val SELF_TRANSLATION_SIMILARITY_THRESHOLD = 0.80f
         private val MINOR_PUNCT_REGEX = Regex("[.,!?;:'\"`~•·]+")
 
         fun normalizeText(input: String, isChinese: Boolean = false): String {

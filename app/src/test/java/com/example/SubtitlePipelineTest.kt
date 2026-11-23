@@ -872,4 +872,107 @@ class SubtitlePipelineTest {
         assertTrue(TranslationEngineMode.SMART_AI.usesAiModel())
         assertTrue(TranslationEngineMode.HYBRID.usesAiModel())
     }
+
+    @Test
+    fun `blur mode self OCR guard rejects 80pct similar echo and clears lastCompletedEntry so history stays clean`() = runTest {
+        val ai = object : TranslationProvider {
+            override val mode: TranslationEngineMode = TranslationEngineMode.GOOGLE_FREE
+            var calls = 0
+            override suspend fun isReady(config: TranslationConfig): Boolean = true
+            override suspend fun translate(text: String, config: TranslationConfig): String {
+                calls++
+                return "Kapıyı hemen aç"
+            }
+            override fun close() = Unit
+        }
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(TranslationEngineMode.GOOGLE_FREE to ai),
+            cacheStore = InMemoryCacheStore()
+        )
+        val config = TranslationConfig(
+            debounceMs = 200L,
+            displayMode = DisplayMode.IN_PLACE_BLUR,
+            engineMode = TranslationEngineMode.GOOGLE_FREE
+        )
+
+        pipeline.processRecognizedResult(
+            simpleResult("Open the door now"),
+            null,
+            config
+        )
+        advanceTimeBy(200L)
+        runCurrent()
+        assertEquals(1, ai.calls)
+        assertEquals("Kapıyı hemen aç", pipeline.output.value.translatedText)
+        assertEquals("Kapıyı hemen aç", pipeline.output.value.lastCompletedEntry?.translatedText)
+
+        // 12 chars out of 15 match -> 80% exact threshold ("Kapıyı hemen ab")
+        // Verify 80% threshold rejects loop, skips translator, preserves active text, and nulls lastCompletedEntry
+        pipeline.processRecognizedResult(
+            simpleResult("Kapıyı hemen ab"),
+            null,
+            config
+        )
+        advanceTimeBy(300L)
+        runCurrent()
+
+        assertEquals(1, ai.calls)
+        assertEquals("Kapıyı hemen aç", pipeline.output.value.translatedText)
+        assertEquals(1, pipeline.output.value.inPlaceBlocks.size)
+        assertEquals(1L, pipeline.output.value.framesSkipped)
+        assertEquals(null, pipeline.output.value.lastCompletedEntry)
+    }
+
+    @Test
+    fun `blur mode rejects Turkish target-language echo without calling translator or adding history`() = runTest {
+        val web = object : TranslationProvider {
+            override val mode: TranslationEngineMode = TranslationEngineMode.GOOGLE_FREE
+            var calls = 0
+            override suspend fun isReady(config: TranslationConfig): Boolean = true
+            override suspend fun translate(text: String, config: TranslationConfig): String {
+                calls++
+                return "Karanlık ormandan hemen kaçmalıyız"
+            }
+            override fun close() = Unit
+        }
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(TranslationEngineMode.GOOGLE_FREE to web),
+            cacheStore = InMemoryCacheStore()
+        )
+        val config = TranslationConfig(
+            sourceLangCode = TranslateLanguage.ENGLISH,
+            targetLangCode = TranslateLanguage.TURKISH,
+            debounceMs = 200L,
+            displayMode = DisplayMode.IN_PLACE_BLUR,
+            engineMode = TranslationEngineMode.GOOGLE_FREE
+        )
+
+        pipeline.processRecognizedResult(simpleResult("We must escape the dark forest immediately"), null, config)
+        advanceTimeBy(200L)
+        runCurrent()
+        assertEquals(1, web.calls)
+        assertEquals("Karanlık ormandan hemen kaçmalıyız", pipeline.output.value.translatedText)
+
+        // Completely different fragmented Turkish OCR read from blurred overlay -> blocked by Turkish language guard
+        pipeline.processRecognizedResult(simpleResult("Güçlü şövalye ışığı"), null, config)
+        advanceTimeBy(300L)
+        runCurrent()
+
+        assertEquals(1, web.calls)
+        assertEquals("Karanlık ormandan hemen kaçmalıyız", pipeline.output.value.translatedText)
+        assertEquals(null, pipeline.output.value.lastCompletedEntry)
+    }
+
+    @Test
+    fun `blur backdrop style defaults preserve dark frosted and support real blur intensity`() {
+        val defaults = TranslationConfig()
+        assertEquals(com.example.model.BlurBackdropStyle.DARK_FROSTED, defaults.inPlaceBlurStyle)
+        assertEquals(0.70f, defaults.inPlaceBlurIntensity, 0.001f)
+        assertEquals(2, com.example.model.BlurBackdropStyle.entries.size)
+        assertTrue(com.example.model.BlurBackdropStyle.entries.contains(com.example.model.BlurBackdropStyle.REAL_BLUR))
+    }
 }

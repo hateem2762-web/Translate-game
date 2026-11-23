@@ -123,7 +123,9 @@ fun SandboxSimulationCard(
         uiState.config.inPlaceCornerRadiusDp,
         uiState.config.inPlaceOffsetXdp,
         uiState.config.inPlaceOffsetYdp,
-        uiState.config.subtitleTextColorArgb
+        uiState.config.subtitleTextColorArgb,
+        uiState.config.inPlaceBlurStyle,
+        uiState.config.inPlaceBlurIntensity
     ) {
         InPlaceRenderStyle(
             fontSizeSp = uiState.config.fontSizeSp,
@@ -132,7 +134,9 @@ fun SandboxSimulationCard(
             cornerRadiusDp = uiState.config.inPlaceCornerRadiusDp,
             offsetXdp = uiState.config.inPlaceOffsetXdp,
             offsetYdp = uiState.config.inPlaceOffsetYdp,
-            textColorArgb = uiState.config.subtitleTextColorArgb
+            textColorArgb = uiState.config.subtitleTextColorArgb,
+            blurStyle = uiState.config.inPlaceBlurStyle,
+            blurIntensity = uiState.config.inPlaceBlurIntensity
         )
     }
 

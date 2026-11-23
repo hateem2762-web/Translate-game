@@ -142,16 +142,18 @@ class ScreenCaptureManager(
     /**
      * Waits past SurfaceFlinger's hide-overlay composite after [minValidTimestampNs] (measured on the
      * same System.nanoTime() clock as OnImageAvailableListener) and acquires a clean frame.
-     * Falls back to latest available frame after settle if VirtualDisplay coalesced the frame.
+     * Never falls back to a pre-hide image buffer that might still contain the translated overlay.
      */
     suspend fun awaitAndCaptureStealthRoi(
         roi: RoiRect,
         minValidTimestampNs: Long = 0L,
-        settleMs: Long = 18L,
-        maxWaitMs: Long = 76L
+        settleMs: Long = 12L,
+        maxWaitMs: Long = 96L
     ): Bitmap? {
-        delay(settleMs)
-        val deadlineMs = System.currentTimeMillis() + (maxWaitMs - settleMs).coerceAtLeast(18L)
+        if (settleMs > 0L) {
+            delay(settleMs)
+        }
+        val deadlineMs = System.currentTimeMillis() + (maxWaitMs - settleMs).coerceAtLeast(24L)
 
         while (true) {
             val reader = imageReader ?: return null
@@ -165,18 +167,28 @@ class ScreenCaptureManager(
                         image.close()
                     }
                 }
+            } else {
+                // Flush stale pre-hide buffers so VirtualDisplay never stalls on a 2-slot ImageReader
+                runCatching {
+                    while (true) {
+                        val stale = reader.acquireNextImage() ?: break
+                        stale.close()
+                    }
+                }
             }
 
             val remaining = deadlineMs - System.currentTimeMillis()
             if (remaining <= 0L) {
                 nextFrameSignal = null
-                // Final post-settle acquire fallback so static screens never starve Blur OCR
-                val fallbackImg = reader.acquireLatestImage() ?: return null
-                return try {
-                    cropPlaneToBitmap(fallbackImg, roi)
-                } finally {
-                    fallbackImg.close()
+                if (minValidTimestampNs <= 0L || lastImageTimestampNs >= minValidTimestampNs) {
+                    val cleanImg = reader.acquireLatestImage() ?: return null
+                    return try {
+                        cropPlaneToBitmap(cleanImg, roi)
+                    } finally {
+                        cleanImg.close()
+                    }
                 }
+                return null
             }
 
             val signal = CompletableDeferred<Unit>().also { nextFrameSignal = it }

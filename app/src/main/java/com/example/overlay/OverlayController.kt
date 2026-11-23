@@ -255,7 +255,7 @@ class OverlayController(
 
     fun hasActiveInPlaceOverlay(): Boolean {
         return currentHubStage == OverlayHubStage.ACTIVE_MODE &&
-            roiView?.hasActiveInPlaceBlocks() == true
+            (roiView?.hasActiveInPlaceBlocks() == true || hudView?.hasInPlaceError() == true)
     }
 
     fun getActiveMaskRectsInRoi(): Pair<List<RoiRect>, Int> {
@@ -264,9 +264,11 @@ class OverlayController(
 
     fun setInPlaceStealth(hidden: Boolean) {
         roiView?.setInPlaceStealth(hidden)
+        hudView?.setInPlaceStealth(hidden)
     }
 
     suspend fun hideInPlaceAndAwaitCommitNs(): Long {
+        hudView?.setInPlaceStealth(true)
         return roiView?.awaitHiddenCommittedNs() ?: System.nanoTime()
     }
 

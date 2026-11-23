@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.model.AiProviderPreset
+import com.example.model.BlurBackdropStyle
 import com.example.model.ClassicTextFitMode
 import com.example.model.DisplayMode
 import com.example.model.FloatingBubbleBehavior
@@ -46,6 +47,8 @@ class SettingsDataStore(private val context: Context) {
         val IN_PLACE_CORNER_RADIUS = floatPreferencesKey("in_place_corner_radius_dp")
         val IN_PLACE_OFFSET_X = floatPreferencesKey("in_place_offset_x_dp")
         val IN_PLACE_OFFSET_Y = floatPreferencesKey("in_place_offset_y_dp")
+        val IN_PLACE_BLUR_STYLE = stringPreferencesKey("in_place_blur_style")
+        val IN_PLACE_BLUR_INTENSITY = floatPreferencesKey("in_place_blur_intensity")
 
         val CLASSIC_BOX_WIDTH_DP = intPreferencesKey("classic_box_width_dp")
         val CLASSIC_BOX_HEIGHT_DP = intPreferencesKey("classic_box_height_dp")
@@ -176,6 +179,10 @@ class SettingsDataStore(private val context: Context) {
             inPlaceCornerRadiusDp = (prefs[Keys.IN_PLACE_CORNER_RADIUS] ?: 12f).coerceIn(0f, 28f),
             inPlaceOffsetXdp = (prefs[Keys.IN_PLACE_OFFSET_X] ?: 0f).coerceIn(-30f, 30f),
             inPlaceOffsetYdp = (prefs[Keys.IN_PLACE_OFFSET_Y] ?: 0f).coerceIn(-30f, 30f),
+            inPlaceBlurStyle = runCatching {
+                BlurBackdropStyle.valueOf(prefs[Keys.IN_PLACE_BLUR_STYLE] ?: BlurBackdropStyle.DARK_FROSTED.name)
+            }.getOrDefault(BlurBackdropStyle.DARK_FROSTED),
+            inPlaceBlurIntensity = (prefs[Keys.IN_PLACE_BLUR_INTENSITY] ?: 0.70f).coerceIn(0.20f, 1.0f),
             classicBoxWidthDp = (prefs[Keys.CLASSIC_BOX_WIDTH_DP] ?: 340).coerceIn(200, 440),
             classicBoxHeightDp = (prefs[Keys.CLASSIC_BOX_HEIGHT_DP] ?: 136).coerceIn(84, 340),
             classicBoxX = prefs[Keys.CLASSIC_BOX_X] ?: -1,
@@ -266,6 +273,14 @@ class SettingsDataStore(private val context: Context) {
         context.dataStore.edit { it[Keys.IN_PLACE_OFFSET_Y] = dp.coerceIn(-30f, 30f) }
     }
 
+    suspend fun updateInPlaceBlurStyle(style: BlurBackdropStyle) {
+        context.dataStore.edit { it[Keys.IN_PLACE_BLUR_STYLE] = style.name }
+    }
+
+    suspend fun updateInPlaceBlurIntensity(intensity: Float) {
+        context.dataStore.edit { it[Keys.IN_PLACE_BLUR_INTENSITY] = intensity.coerceIn(0.20f, 1.0f) }
+    }
+
     suspend fun resetInPlaceTuning() {
         context.dataStore.edit { prefs ->
             prefs[Keys.IN_PLACE_PADDING_X] = 10f
@@ -273,6 +288,7 @@ class SettingsDataStore(private val context: Context) {
             prefs[Keys.IN_PLACE_CORNER_RADIUS] = 12f
             prefs[Keys.IN_PLACE_OFFSET_X] = 0f
             prefs[Keys.IN_PLACE_OFFSET_Y] = 0f
+            prefs[Keys.IN_PLACE_BLUR_INTENSITY] = 0.70f
         }
     }
 

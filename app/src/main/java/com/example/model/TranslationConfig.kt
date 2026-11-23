@@ -7,6 +7,20 @@ enum class DisplayMode(val shortLabelTr: String) {
     IN_PLACE_BLUR("Doğal")
 }
 
+enum class BlurBackdropStyle(
+    val labelTr: String,
+    val descriptionTr: String
+) {
+    DARK_FROSTED(
+        labelTr = "Koyu Buzlu",
+        descriptionTr = "Mevcut yarı saydam koyu buzlu arka plan kutusunu korur."
+    ),
+    REAL_BLUR(
+        labelTr = "Gerçek Bulanıklaştırma",
+        descriptionTr = "Siyah kutu çizmeden altındaki oyun görüntüsünü kırpıp Gaussian Blur ile eritir."
+    )
+}
+
 enum class FloatingBubbleBehavior(
     val labelTr: String,
     val descriptionTr: String
@@ -248,6 +262,8 @@ data class TranslationConfig(
     val inPlaceCornerRadiusDp: Float = 12f,
     val inPlaceOffsetXdp: Float = 0f,
     val inPlaceOffsetYdp: Float = 0f,
+    val inPlaceBlurStyle: BlurBackdropStyle = BlurBackdropStyle.DARK_FROSTED,
+    val inPlaceBlurIntensity: Float = 0.70f,
     // Resizable & persisted Classic Box dimensions, text fitting behavior, and background-only opacity (0f..1f)
     val classicBoxWidthDp: Int = 340,
     val classicBoxHeightDp: Int = 136,

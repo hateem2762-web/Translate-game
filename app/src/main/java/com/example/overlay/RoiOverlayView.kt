@@ -135,14 +135,14 @@ class RoiOverlayView(
      */
     suspend fun awaitHiddenCommittedNs(): Long {
         setInPlaceStealth(true)
-        var traversalMinNs = System.nanoTime()
-        withTimeoutOrNull(44L) {
+        var traversalMinNs = System.nanoTime() + 6_000_000L
+        withTimeoutOrNull(56L) {
             suspendCancellableCoroutine { cont ->
                 val choreographer = Choreographer.getInstance()
                 var secondCallback: Choreographer.FrameCallback? = null
                 val firstCallback = Choreographer.FrameCallback {
-                    // Frame 1 CALLBACK_ANIMATION: traversal draws invisible layer ~1-3ms from now.
-                    traversalMinNs = System.nanoTime() + 3_000_000L
+                    // Frame 1 CALLBACK_ANIMATION: UI traversal draws INVISIBLE right after this (~2-4ms).
+                    traversalMinNs = System.nanoTime() + 6_000_000L
                     val cb2 = Choreographer.FrameCallback {
                         if (cont.isActive) {
                             cont.resume(Unit)

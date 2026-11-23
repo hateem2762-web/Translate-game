@@ -114,6 +114,8 @@ class MainActivity : ComponentActivity() {
                     onInPlaceCornerRadiusChange = { viewModel.updateInPlaceCornerRadius(it) },
                     onInPlaceOffsetXChange = { viewModel.updateInPlaceOffsetX(it) },
                     onInPlaceOffsetYChange = { viewModel.updateInPlaceOffsetY(it) },
+                    onInPlaceBlurStyleChange = { viewModel.updateInPlaceBlurStyle(it) },
+                    onInPlaceBlurIntensityChange = { viewModel.updateInPlaceBlurIntensity(it) },
                     onResetInPlaceTuning = { viewModel.resetInPlaceTuning() },
                     onClassicBoxWidthChange = { viewModel.updateClassicBoxWidthDp(it) },
                     onClassicBoxHeightChange = { viewModel.updateClassicBoxHeightDp(it) },

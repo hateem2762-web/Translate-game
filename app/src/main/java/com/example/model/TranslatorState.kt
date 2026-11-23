@@ -50,6 +50,8 @@ data class TranslatorTelemetry(
     val inPlaceCornerRadiusDp: Float = 12f,
     val inPlaceOffsetXdp: Float = 0f,
     val inPlaceOffsetYdp: Float = 0f,
+    val inPlaceBlurStyle: BlurBackdropStyle = BlurBackdropStyle.DARK_FROSTED,
+    val inPlaceBlurIntensity: Float = 0.70f,
     val classicBoxWidthDp: Int = 340,
     val classicBoxHeightDp: Int = 136,
     val classicBoxX: Int = -1,
