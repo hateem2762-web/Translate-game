@@ -27,6 +27,7 @@ object BlurMaskHelper {
         blurIntensity: Float = 0.70f
     ): BlurredPatchResult {
         return when (blurStyle) {
+            BlurBackdropStyle.PURE_TEXT -> BlurredPatchResult(null, Color.TRANSPARENT)
             BlurBackdropStyle.DARK_FROSTED -> createFrostedPatch(sourceBitmap, box, opacity)
             BlurBackdropStyle.REAL_BLUR -> createRealBlurPatch(sourceBitmap, box, blurIntensity)
         }
@@ -44,8 +45,8 @@ object BlurMaskHelper {
         }
 
         val clampedIntensity = blurIntensity.coerceIn(0.20f, 1.0f)
-        val marginX = (box.width * 0.10f).toInt().coerceIn(8, 28)
-        val marginY = (box.height * 0.16f).toInt().coerceIn(6, 22)
+        val marginX = (box.width * 0.14f).toInt().coerceIn(10, 36)
+        val marginY = (box.height * 0.28f).toInt().coerceIn(8, 32)
 
         val left = (box.x - marginX).coerceIn(0, w - 1)
         val top = (box.y - marginY).coerceIn(0, h - 1)
@@ -57,15 +58,15 @@ object BlurMaskHelper {
         val avgColor = sampleBorderColor(sourceBitmap, left, top, boxW, boxH)
         val patch = runCatching {
             val crop = Bitmap.createBitmap(sourceBitmap, left, top, boxW, boxH)
-            // Keep smooth half-resolution buffer so Gaussian blur stays silky rather than blocky
-            val workW = (boxW / 2).coerceIn(24, 400)
-            val workH = (boxH / 2).coerceIn(16, 200)
+            // Downscale to 1/3 resolution before 3-pass Gaussian approximation so sharp original subtitle letters melt completely
+            val workW = (boxW / 3).coerceIn(28, 320)
+            val workH = (boxH / 3).coerceIn(18, 160)
             val work = if (crop.width != workW || crop.height != workH) {
                 Bitmap.createScaledBitmap(crop, workW, workH, true).also { crop.recycle() }
             } else {
                 crop
             }
-            val radius = (3f + clampedIntensity * 16f).roundToInt().coerceIn(3, 20)
+            val radius = (4f + clampedIntensity * 14f).roundToInt().coerceIn(4, 18)
             val blurred = gaussianApproxBlur(work, radius = radius, passes = 3)
             if (blurred !== work) work.recycle()
             blurred

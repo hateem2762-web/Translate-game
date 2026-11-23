@@ -9,10 +9,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
-import android.graphics.RenderEffect
-import android.graphics.RenderNode
 import android.graphics.Shader
-import android.os.Build
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
@@ -316,9 +313,9 @@ class InPlaceCanvasRenderer(context: Context) {
             val clampedRadius = radius.coerceAtMost(maxRadius)
 
             maskRect.set(left, top, left + boxW, top + boxH)
-            val isRealBlur = style.blurStyle == BlurBackdropStyle.REAL_BLUR
+            val blurStyle = style.blurStyle
 
-            if (!isRealBlur) {
+            if (blurStyle == BlurBackdropStyle.DARK_FROSTED) {
                 // 1. Soft outer feathered halo so dark frosted edges blend into the game scene
                 haloRect.set(
                     (maskRect.left - haloSpread).coerceAtLeast(0f),
@@ -337,68 +334,62 @@ class InPlaceCanvasRenderer(context: Context) {
                 canvas.drawRoundRect(haloRect, haloRadius, haloRadius, haloPaint)
             }
 
-            // 2. Clipped backdrop rounded container
-            clipPath.reset()
-            clipPath.addRoundRect(maskRect, clampedRadius, clampedRadius, Path.Direction.CW)
+            if (blurStyle != BlurBackdropStyle.PURE_TEXT) {
+                // 2. Clipped backdrop rounded container
+                clipPath.reset()
+                clipPath.addRoundRect(maskRect, clampedRadius, clampedRadius, Path.Direction.CW)
 
-            canvas.save()
-            canvas.clipPath(clipPath)
+                canvas.save()
+                canvas.clipPath(clipPath)
 
-            val patch = block.blurredPatch
-            if (patch != null && !patch.isRecycled) {
-                val gpuBlurRadius = if (isRealBlur) {
-                    6f + style.blurIntensity.coerceIn(0.20f, 1.0f) * 20f
-                } else {
-                    24f
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && canvas.isHardwareAccelerated) {
-                    drawHardwareBlurredPatch(canvas, patch, maskRect, gpuBlurRadius)
-                } else {
+                val patch = block.blurredPatch
+                if (patch != null && !patch.isRecycled) {
                     srcRect.set(0, 0, patch.width, patch.height)
                     canvas.drawBitmap(patch, srcRect, maskRect, bitmapPaint)
                 }
+
+                if (blurStyle == BlurBackdropStyle.DARK_FROSTED) {
+                    val baseColor = block.sampledBgColor
+                    val centerAlpha = Color.alpha(baseColor).coerceIn(175, 244)
+                    val edgeAlpha = (centerAlpha * 0.82f).toInt().coerceIn(140, 225)
+                    val r = Color.red(baseColor)
+                    val g = Color.green(baseColor)
+                    val b = Color.blue(baseColor)
+                    scrimPaint.shader = LinearGradient(
+                        maskRect.left,
+                        maskRect.top,
+                        maskRect.left,
+                        maskRect.bottom,
+                        intArrayOf(
+                            Color.argb(edgeAlpha, r, g, b),
+                            Color.argb(centerAlpha, r, g, b),
+                            Color.argb(edgeAlpha, r, g, b)
+                        ),
+                        floatArrayOf(0f, 0.5f, 1f),
+                        Shader.TileMode.CLAMP
+                    )
+                    canvas.drawRect(maskRect, scrimPaint)
+                    scrimPaint.shader = null
+                } else if (patch == null || patch.isRecycled) {
+                    // Fallback only if no snapshot patch was available (e.g., synthetic test)
+                    scrimPaint.color = Color.argb(120, 12, 16, 26)
+                    canvas.drawRect(maskRect, scrimPaint)
+                }
+                canvas.restore()
+
+                if (blurStyle == BlurBackdropStyle.DARK_FROSTED && clampedRadius > 0f) {
+                    canvas.drawRoundRect(maskRect, clampedRadius, clampedRadius, subtleRimPaint)
+                }
             }
 
-            if (!isRealBlur) {
-                val baseColor = block.sampledBgColor
-                val centerAlpha = Color.alpha(baseColor).coerceIn(175, 244)
-                val edgeAlpha = (centerAlpha * 0.82f).toInt().coerceIn(140, 225)
-                val r = Color.red(baseColor)
-                val g = Color.green(baseColor)
-                val b = Color.blue(baseColor)
-                scrimPaint.shader = LinearGradient(
-                    maskRect.left,
-                    maskRect.top,
-                    maskRect.left,
-                    maskRect.bottom,
-                    intArrayOf(
-                        Color.argb(edgeAlpha, r, g, b),
-                        Color.argb(centerAlpha, r, g, b),
-                        Color.argb(edgeAlpha, r, g, b)
-                    ),
-                    floatArrayOf(0f, 0.5f, 1f),
-                    Shader.TileMode.CLAMP
-                )
-                canvas.drawRect(maskRect, scrimPaint)
-                scrimPaint.shader = null
-            } else if (patch == null || patch.isRecycled) {
-                // Fallback only if no snapshot patch was available (e.g., synthetic test)
-                scrimPaint.color = Color.argb(110, 10, 14, 22)
-                canvas.drawRect(maskRect, scrimPaint)
-            }
-            canvas.restore()
-
-            if (!isRealBlur && clampedRadius > 0f) {
-                canvas.drawRoundRect(maskRect, clampedRadius, clampedRadius, subtleRimPaint)
-            }
-
-            // 3. Draw crisp readable translated text centered inside frosted backdrop
+            // 3. Draw crisp readable translated text centered inside block bounds
             val textY = top + ((boxH - placed.layout.height) / 2f).coerceAtLeast(placed.innerPadY)
             canvas.save()
             canvas.translate(left + placed.innerPadX, textY)
             strokeTextPaint.textSize = placed.chosenSp * scaledDensity
-            strokeTextPaint.strokeWidth = (placed.chosenSp / 18f * 2.8f * density)
-                .coerceIn(1.5f * density, 3.2f * density)
+            val strokeScale = if (blurStyle == BlurBackdropStyle.PURE_TEXT) 3.1f else 2.8f
+            strokeTextPaint.strokeWidth = (placed.chosenSp / 18f * strokeScale * density)
+                .coerceIn(1.6f * density, 3.6f * density)
             val strokeLayout = buildLayoutWithPaint(
                 text = block.translatedText,
                 paint = strokeTextPaint,
@@ -511,39 +502,6 @@ class InPlaceCanvasRenderer(context: Context) {
                 innerPadX = innerPadX,
                 innerPadY = innerPadY
             )
-        }
-    }
-
-    private fun drawHardwareBlurredPatch(
-        canvas: Canvas,
-        patch: android.graphics.Bitmap,
-        dst: RectF,
-        blurRadiusPx: Float = 24f
-    ) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        val w = dst.width().toInt().coerceAtLeast(1)
-        val h = dst.height().toInt().coerceAtLeast(1)
-        val radius = blurRadiusPx.coerceIn(4f, 36f)
-        val ok = runCatching {
-            val node = RenderNode("inPlaceBlurPatch")
-            node.setPosition(0, 0, w, h)
-            node.setRenderEffect(RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP))
-            val rec = node.beginRecording(w, h)
-            srcRect.set(0, 0, patch.width, patch.height)
-            dstRect.set(0f, 0f, w.toFloat(), h.toFloat())
-            rec.drawBitmap(patch, srcRect, dstRect, bitmapPaint)
-            node.endRecording()
-
-            canvas.save()
-            canvas.translate(dst.left, dst.top)
-            canvas.drawRenderNode(node)
-            canvas.restore()
-            node.discardDisplayList()
-        }.isSuccess
-
-        if (!ok) {
-            srcRect.set(0, 0, patch.width, patch.height)
-            canvas.drawBitmap(patch, srcRect, dst, bitmapPaint)
         }
     }
 

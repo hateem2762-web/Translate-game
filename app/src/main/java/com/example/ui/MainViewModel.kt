@@ -133,6 +133,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val aiTestStatusState = MutableStateFlow<AiTestState>(AiTestState.Idle)
     private val sandboxStatusState = MutableStateFlow(SandboxState())
     private val modelCatalogStatusState = MutableStateFlow(ModelCatalogState())
+    private var lastSandboxSceneBitmap: Bitmap? = null
 
     // Per-provider isolated draft maps so switching providers never leaks another provider's key
     private val activePresetDraft = MutableStateFlow(AiProviderPreset.GROQ)
@@ -321,15 +322,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateInPlaceBlurStyle(style: BlurBackdropStyle) {
-        viewModelScope.launch { settingsStore.updateInPlaceBlurStyle(style) }
+        viewModelScope.launch {
+            settingsStore.updateInPlaceBlurStyle(style)
+            refreshSandboxBlurPatches(blurStyle = style)
+        }
     }
 
     fun updateInPlaceBlurIntensity(intensity: Float) {
-        viewModelScope.launch { settingsStore.updateInPlaceBlurIntensity(intensity) }
+        viewModelScope.launch {
+            settingsStore.updateInPlaceBlurIntensity(intensity)
+            refreshSandboxBlurPatches(blurIntensity = intensity)
+        }
     }
 
     fun resetInPlaceTuning() {
-        viewModelScope.launch { settingsStore.resetInPlaceTuning() }
+        viewModelScope.launch {
+            settingsStore.resetInPlaceTuning()
+            refreshSandboxBlurPatches(blurIntensity = 0.70f)
+        }
     }
 
     fun updateClassicBoxWidthDp(widthDp: Int) {
@@ -487,6 +497,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectSandboxPreset(preset: SandboxPreset) {
+        recycleLastSandboxBitmap()
         sandboxStatusState.value = SandboxState(selectedPreset = preset)
         viewModelScope.launch {
             settingsStore.updateSourceLanguage(preset.sourceLangCode)
@@ -494,7 +505,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearSandboxPreview() {
+        recycleLastSandboxBitmap()
         sandboxStatusState.value = SandboxState(selectedPreset = sandboxStatusState.value.selectedPreset)
+    }
+
+    private fun recycleLastSandboxBitmap() {
+        lastSandboxSceneBitmap?.let {
+            if (!it.isRecycled) it.recycle()
+        }
+        lastSandboxSceneBitmap = null
+    }
+
+    private suspend fun refreshSandboxBlurPatches(
+        blurStyle: BlurBackdropStyle = uiState.value.config.inPlaceBlurStyle,
+        blurIntensity: Float = uiState.value.config.inPlaceBlurIntensity,
+        overlayOpacity: Float = uiState.value.config.overlayOpacity
+    ) {
+        val bmp = lastSandboxSceneBitmap ?: return
+        if (bmp.isRecycled) return
+        val existingBlocks = sandboxStatusState.value.inPlaceBlocks
+        if (existingBlocks.isEmpty()) return
+        val refreshed = withContext(Dispatchers.Default) {
+            existingBlocks.map { block ->
+                val patchResult = BlurMaskHelper.createPatch(
+                    sourceBitmap = bmp,
+                    box = block.boundingBox,
+                    opacity = overlayOpacity,
+                    blurStyle = blurStyle,
+                    blurIntensity = blurIntensity
+                )
+                block.copy(
+                    blurredPatch = patchResult.blurredBitmap,
+                    sampledBgColor = patchResult.frostedTintColor
+                )
+            }
+        }
+        sandboxStatusState.value = sandboxStatusState.value.copy(inPlaceBlocks = refreshed)
     }
 
     fun runSandboxTranslation(sceneBitmap: Bitmap) {
@@ -502,6 +548,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val preset = sandboxStatusState.value.selectedPreset
         val effectiveConfig = config.copy(sourceLangCode = preset.sourceLangCode)
         val isChinese = effectiveConfig.sourceLangCode == TranslateLanguage.CHINESE
+
+        recycleLastSandboxBitmap()
+        lastSandboxSceneBitmap = runCatching { sceneBitmap.copy(Bitmap.Config.ARGB_8888, false) }.getOrNull()
 
         sandboxStatusState.value = sandboxStatusState.value.copy(
             isRunning = true,
@@ -702,7 +751,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateOverlayOpacity(opacity: Float) {
-        viewModelScope.launch { settingsStore.updateOverlayOpacity(opacity) }
+        viewModelScope.launch {
+            settingsStore.updateOverlayOpacity(opacity)
+            refreshSandboxBlurPatches(overlayOpacity = opacity)
+        }
     }
 
     fun updateShowOriginalText(show: Boolean) {
@@ -726,6 +778,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        recycleLastSandboxBitmap()
         sandboxOcrEngine.close()
         translatorEngine.close()
         smartAiTester.close()

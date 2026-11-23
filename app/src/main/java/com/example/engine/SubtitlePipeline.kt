@@ -928,6 +928,7 @@ class SubtitlePipeline(
         val lower = normalizedOcr.lowercase().trim()
         if (lower.isEmpty()) return false
         val strippedOcr = stripMinorPunctuation(lower)
+        val foldedOcr = foldTurkishForMatch(strippedOcr)
 
         val candidates = LinkedHashSet<String>()
         if (lastTranslatedText.isNotBlank()) {
@@ -946,10 +947,15 @@ class SubtitlePipeline(
         }
         candidates.addAll(lastRenderedTranslations)
 
+        val ocrTokens = tokenizeForOverlap(foldedOcr)
+
         for (candidate in candidates) {
             if (lower == candidate) return true
             val strippedCandidate = stripMinorPunctuation(candidate)
             if (strippedOcr.isNotEmpty() && strippedOcr == strippedCandidate) return true
+
+            val foldedCandidate = foldTurkishForMatch(strippedCandidate)
+            if (foldedOcr.isNotEmpty() && foldedOcr == foldedCandidate) return true
 
             if (candidate.length >= 4 &&
                 BoundingBoxStabilizer.textSimilarity(lower, candidate) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD
@@ -962,11 +968,33 @@ class SubtitlePipeline(
             ) {
                 return true
             }
-            if (candidate.length >= 10 &&
-                lower.length >= 8 &&
-                (candidate.contains(lower) || lower.contains(candidate))
+            if (foldedCandidate.length >= 4 &&
+                foldedOcr.length >= 4 &&
+                BoundingBoxStabilizer.textSimilarity(foldedOcr, foldedCandidate) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD
             ) {
                 return true
+            }
+            if (foldedCandidate.length >= 8 &&
+                foldedOcr.length >= 6 &&
+                (foldedCandidate.contains(foldedOcr) || foldedOcr.contains(foldedCandidate))
+            ) {
+                return true
+            }
+
+            if (ocrTokens.size >= 2) {
+                val candTokens = tokenizeForOverlap(foldedCandidate)
+                if (candTokens.isNotEmpty()) {
+                    val matchedTokens = ocrTokens.count { ot ->
+                        candTokens.any { ct ->
+                            ot == ct ||
+                                (ot.length >= 4 && ct.length >= 4 &&
+                                    BoundingBoxStabilizer.textSimilarity(ot, ct) >= SELF_TRANSLATION_SIMILARITY_THRESHOLD)
+                        }
+                    }
+                    if (matchedTokens * 1.0f / ocrTokens.size >= 0.60f) {
+                        return true
+                    }
+                }
             }
         }
 
@@ -977,6 +1005,29 @@ class SubtitlePipeline(
             return true
         }
         return false
+    }
+
+    private fun foldTurkishForMatch(input: String): String {
+        if (input.isEmpty()) return input
+        val sb = StringBuilder(input.length)
+        for (ch in input) {
+            when (ch) {
+                'ğ', 'Ğ' -> sb.append('g')
+                'ü', 'Ü' -> sb.append('u')
+                'ş', 'Ş' -> sb.append('s')
+                'ı', 'İ' -> sb.append('i')
+                'ö', 'Ö' -> sb.append('o')
+                'ç', 'Ç' -> sb.append('c')
+                else -> sb.append(ch.lowercaseChar())
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun tokenizeForOverlap(foldedInput: String): List<String> {
+        if (foldedInput.isBlank()) return emptyList()
+        return foldedInput.split(TOKEN_SPLIT_REGEX)
+            .filter { it.length >= 3 }
     }
 
     private fun isLikelyTurkishText(text: String, sourceLangCode: String): Boolean {
@@ -1067,6 +1118,7 @@ class SubtitlePipeline(
         private const val AI_MIN_REQUEST_INTERVAL_MS = 400L
         internal const val SELF_TRANSLATION_SIMILARITY_THRESHOLD = 0.80f
         private val MINOR_PUNCT_REGEX = Regex("[.,!?;:'\"`~•·]+")
+        private val TOKEN_SPLIT_REGEX = Regex("[^\\p{L}\\p{Nd}]+")
 
         fun normalizeText(input: String, isChinese: Boolean = false): String {
             return OcrTextPreprocessor.clean(input, isChinese)

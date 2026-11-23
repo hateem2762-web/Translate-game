@@ -11,13 +11,17 @@ enum class BlurBackdropStyle(
     val labelTr: String,
     val descriptionTr: String
 ) {
+    PURE_TEXT(
+        labelTr = "Saf Çeviri",
+        descriptionTr = "Arka plan kutusu veya bulanıklaştırma olmadan doğrudan ince dış çizgili saf çeviriyi gösterir."
+    ),
     DARK_FROSTED(
-        labelTr = "Koyu Buzlu",
-        descriptionTr = "Mevcut yarı saydam koyu buzlu arka plan kutusunu korur."
+        labelTr = "Arka Planlı",
+        descriptionTr = "Yarı saydam koyu arka plan kutusuyla orijinal metni kapatıp üzerine çeviriyi yerleştirir."
     ),
     REAL_BLUR(
-        labelTr = "Gerçek Bulanıklaştırma",
-        descriptionTr = "Siyah kutu çizmeden altındaki oyun görüntüsünü kırpıp Gaussian Blur ile eritir."
+        labelTr = "Bulanıklaştır",
+        descriptionTr = "Siyah kutu çizmeden alttaki orijinal metni Gaussian Blur ile eritip üzerine çeviriyi yerleştirir."
     )
 }
 

@@ -968,11 +968,60 @@ class SubtitlePipelineTest {
     }
 
     @Test
-    fun `blur backdrop style defaults preserve dark frosted and support real blur intensity`() {
+    fun `blur mode rejects diacritic-dropped and partial token-overlap Turkish echoes`() = runTest {
+        val web = object : TranslationProvider {
+            override val mode: TranslationEngineMode = TranslationEngineMode.GOOGLE_FREE
+            var calls = 0
+            override suspend fun isReady(config: TranslationConfig): Boolean = true
+            override suspend fun translate(text: String, config: TranslationConfig): String {
+                calls++
+                return "Şimdi güçlü şövalye ışığını aç!"
+            }
+            override fun close() = Unit
+        }
+        val pipeline = SubtitlePipeline(
+            scope = this,
+            ocrEngine = FakeOcrEngine(),
+            providers = mapOf(TranslationEngineMode.GOOGLE_FREE to web),
+            cacheStore = InMemoryCacheStore()
+        )
+        val config = TranslationConfig(
+            sourceLangCode = TranslateLanguage.ENGLISH,
+            targetLangCode = TranslateLanguage.TURKISH,
+            debounceMs = 200L,
+            displayMode = DisplayMode.IN_PLACE_BLUR,
+            engineMode = TranslationEngineMode.GOOGLE_FREE
+        )
+
+        pipeline.processRecognizedResult(simpleResult("Turn on the mighty knight's light now!"), null, config)
+        advanceTimeBy(200L)
+        runCurrent()
+        assertEquals(1, web.calls)
+
+        // ML Kit Latin OCR often drops all Turkish diacritics ("ş->s, ü->u, ğ->g, ö->o, ı->i"):
+        // zero diacritics remain AND raw similarity < 80%, yet folded match is 100% -> must be blocked!
+        pipeline.processRecognizedResult(simpleResult("Simdi guclu sovalye isigini ac!"), null, config)
+        advanceTimeBy(300L)
+        runCurrent()
+        assertEquals(1, web.calls)
+        assertEquals(null, pipeline.output.value.lastCompletedEntry)
+
+        // Partial read + surrounding UI noise sharing >=60% folded tokens -> must also be blocked!
+        pipeline.processRecognizedResult(simpleResult("HP 99 guclu sovalye isigini"), null, config)
+        advanceTimeBy(300L)
+        runCurrent()
+        assertEquals(1, web.calls)
+        assertEquals(null, pipeline.output.value.lastCompletedEntry)
+    }
+
+    @Test
+    fun `blur backdrop style defaults preserve dark frosted and expose all 3 options`() {
         val defaults = TranslationConfig()
         assertEquals(com.example.model.BlurBackdropStyle.DARK_FROSTED, defaults.inPlaceBlurStyle)
         assertEquals(0.70f, defaults.inPlaceBlurIntensity, 0.001f)
-        assertEquals(2, com.example.model.BlurBackdropStyle.entries.size)
+        assertEquals(3, com.example.model.BlurBackdropStyle.entries.size)
+        assertTrue(com.example.model.BlurBackdropStyle.entries.contains(com.example.model.BlurBackdropStyle.PURE_TEXT))
+        assertTrue(com.example.model.BlurBackdropStyle.entries.contains(com.example.model.BlurBackdropStyle.DARK_FROSTED))
         assertTrue(com.example.model.BlurBackdropStyle.entries.contains(com.example.model.BlurBackdropStyle.REAL_BLUR))
     }
 }

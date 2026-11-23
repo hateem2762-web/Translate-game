@@ -96,6 +96,7 @@ class SubtitleHudOverlayView(
     private val inPlaceErrorBanner: TextView
 
     private var isClassicBoxStealth: Boolean = false
+    private var isInPlaceStealthActive: Boolean = false
     private var isInPlaceLocked: Boolean = false
     private var lastClassicBoxOpacity: Float = 0.86f
     private var lastBorderAccentColor: Int = Color.parseColor(TranslationEngineMode.OFFLINE_LOCAL.accentHex)
@@ -433,6 +434,7 @@ class SubtitleHudOverlayView(
     fun hasInPlaceError(): Boolean = inPlaceErrorBanner.visibility == View.VISIBLE
 
     fun setInPlaceStealth(hidden: Boolean) {
+        isInPlaceStealthActive = hidden
         if (currentDisplayMode != DisplayMode.IN_PLACE_BLUR) return
         val targetVis = if (hidden) View.INVISIBLE else View.VISIBLE
         val targetAlpha = if (hidden) 0f else 1f
@@ -543,14 +545,21 @@ class SubtitleHudOverlayView(
 
         val isBlur = telemetry.displayMode == DisplayMode.IN_PLACE_BLUR
         if (isBlur != (currentDisplayMode == DisplayMode.IN_PLACE_BLUR) ||
-            (isBlur && inPlaceHandleContainer.visibility != View.VISIBLE) ||
+            (isBlur && !isInPlaceStealthActive && inPlaceHandleContainer.visibility != View.VISIBLE) ||
             (!isBlur && classicWrapper.visibility != View.VISIBLE)
         ) {
             currentDisplayMode = telemetry.displayMode
             if (isBlur) {
                 classicWrapper.visibility = View.GONE
-                inPlaceHandleContainer.visibility = View.VISIBLE
+                if (isInPlaceStealthActive) {
+                    inPlaceHandleContainer.visibility = View.INVISIBLE
+                    inPlaceHandleContainer.alpha = 0f
+                } else {
+                    inPlaceHandleContainer.visibility = View.VISIBLE
+                    inPlaceHandleContainer.alpha = 1f
+                }
             } else {
+                isInPlaceStealthActive = false
                 inPlaceHandleContainer.visibility = View.GONE
                 classicWrapper.visibility = View.VISIBLE
             }

@@ -134,16 +134,19 @@ class RoiOverlayView(
      * System.nanoTime() baseline for ScreenCaptureManager.
      */
     suspend fun awaitHiddenCommittedNs(): Long {
+        val hideStartNs = System.nanoTime()
         setInPlaceStealth(true)
-        var traversalMinNs = System.nanoTime() + 6_000_000L
-        withTimeoutOrNull(56L) {
+        var traversalCommittedNs = hideStartNs + 24_000_000L
+        withTimeoutOrNull(80L) {
             suspendCancellableCoroutine { cont ->
                 val choreographer = Choreographer.getInstance()
                 var secondCallback: Choreographer.FrameCallback? = null
                 val firstCallback = Choreographer.FrameCallback {
-                    // Frame 1 CALLBACK_ANIMATION: UI traversal draws INVISIBLE right after this (~2-4ms).
-                    traversalMinNs = System.nanoTime() + 6_000_000L
+                    // Frame 1 CALLBACK_ANIMATION runs before ViewRootImpl.performTraversals() draws INVISIBLE.
+                    // Wait for Frame 2 so Frame 1's traversal + RenderThread submission has completed.
                     val cb2 = Choreographer.FrameCallback {
+                        val nowNs = System.nanoTime()
+                        traversalCommittedNs = maxOf(nowNs + 8_000_000L, hideStartNs + 24_000_000L)
                         if (cont.isActive) {
                             cont.resume(Unit)
                         }
@@ -158,7 +161,7 @@ class RoiOverlayView(
                 }
             }
         }
-        return traversalMinNs
+        return traversalCommittedNs
     }
 
     /**

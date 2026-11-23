@@ -781,6 +781,7 @@ private fun InPlaceBlurAppearanceCard(
                         SegmentedButton(
                             selected = selected,
                             onClick = { onInPlaceBlurStyleChange(style) },
+                            icon = {},
                             shape = SegmentedButtonDefaults.itemShape(
                                 index = index,
                                 count = BlurBackdropStyle.entries.size
@@ -798,6 +799,7 @@ private fun InPlaceBlurAppearanceCard(
                             Text(
                                 text = style.labelTr,
                                 style = MaterialTheme.typography.labelMedium,
+                                fontSize = 12.sp,
                                 maxLines = 1,
                                 softWrap = false,
                                 overflow = TextOverflow.Ellipsis
@@ -812,26 +814,46 @@ private fun InPlaceBlurAppearanceCard(
                 )
             }
 
-            if (uiState.config.inPlaceBlurStyle == BlurBackdropStyle.DARK_FROSTED) {
-                SliderSettingRow(
-                    title = "Doğal Blur Maske Koyuluğu",
-                    subtitle = "Yarı saydam koyu buzlu arka plan maskesinin koyuluk seviyesi",
-                    valueLabel = "%${(uiState.config.overlayOpacity * 100).roundToInt()}",
-                    value = uiState.config.overlayOpacity,
-                    valueRange = 0.50f..0.95f,
-                    testTag = "opacity_slider",
-                    onValueChange = onOpacityChange
-                )
-            } else {
-                SliderSettingRow(
-                    title = "Bulanıklık Şiddeti (Gaussian Blur)",
-                    subtitle = "Siyah kutu çizmeden alttaki yabancı metni ne kadar güçlü eriteceğini ayarlar",
-                    valueLabel = "%${(uiState.config.inPlaceBlurIntensity * 100).roundToInt()}",
-                    value = uiState.config.inPlaceBlurIntensity,
-                    valueRange = 0.20f..1.0f,
-                    testTag = "blur_intensity_slider",
-                    onValueChange = onInPlaceBlurIntensityChange
-                )
+            when (uiState.config.inPlaceBlurStyle) {
+                BlurBackdropStyle.PURE_TEXT -> {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = ObsidianSurfaceElevated,
+                        border = BorderStroke(1.dp, ObsidianOutline)
+                    ) {
+                        Text(
+                            text = "Arka plan kutusu veya bulanıklaştırma kullanılmaz; yalnızca yüksek kontrastlı dış çizgili saf çeviri gösterilir.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
+                                .testTag("blur_style_pure_text_info")
+                        )
+                    }
+                }
+                BlurBackdropStyle.DARK_FROSTED -> {
+                    SliderSettingRow(
+                        title = "Arka Plan Koyuluğu",
+                        subtitle = "Yarı saydam koyu arka plan kutusunun koyuluk seviyesi",
+                        valueLabel = "%${(uiState.config.overlayOpacity * 100).roundToInt()}",
+                        value = uiState.config.overlayOpacity,
+                        valueRange = 0.50f..0.95f,
+                        testTag = "opacity_slider",
+                        onValueChange = onOpacityChange
+                    )
+                }
+                BlurBackdropStyle.REAL_BLUR -> {
+                    SliderSettingRow(
+                        title = "Bulanıklık Şiddeti (Gaussian Blur)",
+                        subtitle = "Siyah kutu çizmeden alttaki orijinal metni ne kadar güçlü bulanıklaştıracağını ayarlar",
+                        valueLabel = "%${(uiState.config.inPlaceBlurIntensity * 100).roundToInt()}",
+                        value = uiState.config.inPlaceBlurIntensity,
+                        valueRange = 0.20f..1.0f,
+                        testTag = "blur_intensity_slider",
+                        onValueChange = onInPlaceBlurIntensityChange
+                    )
+                }
             }
 
             HorizontalDivider(color = ObsidianOutline)

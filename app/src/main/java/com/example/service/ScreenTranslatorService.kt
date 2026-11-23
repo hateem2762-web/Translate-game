@@ -162,12 +162,16 @@ class ScreenTranslatorService : Service() {
                 val modeOrEngineChanged = config.displayMode != currentConfig.displayMode ||
                     config.engineMode != currentConfig.engineMode
                 val blurAppearanceChanged = config.inPlaceBlurStyle != currentConfig.inPlaceBlurStyle ||
-                    config.inPlaceBlurIntensity != currentConfig.inPlaceBlurIntensity
+                    config.inPlaceBlurIntensity != currentConfig.inPlaceBlurIntensity ||
+                    config.overlayOpacity != currentConfig.overlayOpacity
                 currentConfig = config
                 if (modeOrEngineChanged || presetOrModelChanged) {
                     pipeline.reset()
                 } else if (blurAppearanceChanged) {
                     pipeline.invalidateVisualCache()
+                    if (config.displayMode == DisplayMode.IN_PLACE_BLUR) {
+                        pipeline.clearActiveSubtitle()
+                    }
                 }
                 val configured = AiProviderPreset.entries.filter { p ->
                     config.apiKeyFor(p).isNotBlank()
@@ -428,8 +432,8 @@ class ScreenTranslatorService : Service() {
                                 captureManager.awaitAndCaptureStealthRoi(
                                     roi = roi,
                                     minValidTimestampNs = minValidTsNs,
-                                    settleMs = 12L,
-                                    maxWaitMs = 96L
+                                    settleMs = 24L,
+                                    maxWaitMs = 140L
                                 )
                             } finally {
                                 overlayController.setInPlaceStealth(false)
